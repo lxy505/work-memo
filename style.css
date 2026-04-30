@@ -27,7 +27,7 @@ html, body {
 
 /* ========== 顶部栏 ========== */
 .app-header {
-    height: var(--header-h); padding: 0 16px; padding-top: var(--safe-top);
+    height: calc(var(--header-h) + var(--safe-top)); padding: 0 16px; padding-top: var(--safe-top);
     background: var(--gradient); color: white;
     display: flex; align-items: center; justify-content: space-between;
     flex-shrink: 0; z-index: 10;
