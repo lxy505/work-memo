@@ -54,12 +54,6 @@
 
         <!-- 工作进度页 -->
         <div class="page" id="progressPage">
-            <div class="week-nav">
-                <button onclick="changeWeek(-1)">‹</button>
-                <span id="weekRange">本周</span>
-                <button onclick="changeWeek(1)">›</button>
-            </div>
-            <div class="week-dots" id="weekDots"></div>
             <div class="progress-list" id="progressList"></div>
         </div>
 
@@ -297,6 +291,10 @@
                         <option value="low">低</option>
                     </select>
                 </div>
+            </div>
+            <div class="form-field">
+                <label>截止日期（可选）</label>
+                <input type="date" id="taskDueDate">
             </div>
             <div class="form-field">
                 <label>初始进度</label>
