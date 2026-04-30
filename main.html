@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="工作备忘录">
+    <meta name="theme-color" content="#667eea">
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+    <link rel="manifest" href="manifest.json">
+    <title>工作备忘录</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <header class="app-header" id="appHeader">
+            <h1 id="pageTitle">工作事项</h1>
+            <div class="header-actions" id="headerActions">
+                <button class="icon-btn" id="voiceFab" onclick="toggleVoicePanel()">🎤</button>
+                <button class="icon-btn primary" id="addBtn" onclick="handleAdd()">+</button>
+            </div>
+        </header>
+
+        <!-- 语音面板 -->
+        <div class="voice-panel" id="voicePanel">
+            <div class="voice-backdrop" onclick="toggleVoicePanel()"></div>
+            <div class="voice-sheet">
+                <div class="voice-indicator"></div>
+                <div class="voice-animation">
+                    <div class="voice-ring" id="voiceRing">
+                        <span class="mic-icon">🎤</span>
+                    </div>
+                </div>
+                <p class="voice-status" id="voiceStatus">点击下方按钮开始说话</p>
+                <p class="voice-hint">例如："完成了登录页面的开发"</p>
+                <button class="voice-record-btn" id="voiceRecordBtn" onclick="toggleRecording()">
+                    <span id="recordLabel">开始录音</span>
+                </button>
+                <div class="voice-result" id="voiceResult"></div>
+            </div>
+        </div>
+
+        <!-- 工作事项页 -->
+        <div class="page active" id="tasksPage">
+            <div class="filter-bar">
+                <button class="filter-chip active" onclick="filterTasks('all', this)">全部</button>
+                <button class="filter-chip" onclick="filterTasks('pending', this)">进行中</button>
+                <button class="filter-chip" onclick="filterTasks('completed', this)">已完成</button>
+            </div>
+            <div class="category-bar" id="categoryBar"></div>
+            <div class="task-list" id="taskList"></div>
+        </div>
+
+        <!-- 工作进度页 -->
+        <div class="page" id="progressPage">
+            <div class="week-nav">
+                <button onclick="changeWeek(-1)">‹</button>
+                <span id="weekRange">本周</span>
+                <button onclick="changeWeek(1)">›</button>
+            </div>
+            <div class="week-dots" id="weekDots"></div>
+            <div class="progress-list" id="progressList"></div>
+        </div>
+
+        <!-- 周报月报页 -->
+        <div class="page" id="reportPage">
+            <div class="report-type-toggle">
+                <button class="toggle-btn active" onclick="switchReport('weekly', this)">周报</button>
+                <button class="toggle-btn" onclick="switchReport('monthly', this)">月报</button>
+            </div>
+            <div class="report-config" id="reportConfig">
+                <div class="report-select" id="weeklySelect">
+                    <label>选择周次</label>
+                    <input type="week" id="reportWeek">
+                </div>
+                <div class="report-select" id="monthlySelect" style="display:none;">
+                    <label>选择月份</label>
+                    <input type="month" id="reportMonth">
+                </div>
+                <button class="btn-generate" onclick="generateReport()">生成</button>
+            </div>
+            <div class="report-preview" id="reportPreview"></div>
+            <div class="share-actions">
+                <button class="btn-share" onclick="exportExcel()">
+                    <span class="share-icon">📊</span>导出Excel
+                </button>
+                <button class="btn-share wechat" onclick="shareToWechat()">
+                    <span class="share-icon">💬</span>发送微信
+                </button>
+            </div>
+        </div>
+
+        <!-- 设置页 -->
+        <div class="page" id="settingsPage">
+            <div class="settings-group">
+                <h3>🏷️ 工作分类</h3>
+                <div class="category-editor" id="categoryEditor"></div>
+                <div class="add-category-row">
+                    <input type="text" id="newCatInput" placeholder="输入新分类">
+                    <button onclick="addCategory()">添加</button>
+                </div>
+            </div>
+
+            <div class="settings-group">
+                <h3>🔔 每日提醒</h3>
+                <div class="setting-row">
+                    <span>启用提醒</span>
+                    <label class="switch"><input type="checkbox" id="notifyToggle" checked><span class="slider"></span></label>
+                </div>
+                <div class="setting-row">
+                    <span>提醒时间</span>
+                    <input type="time" id="notifyTime" value="17:00" class="time-input">
+                </div>
+                <p class="setting-note">到点自动弹出提醒，并推送未完成事项到微信</p>
+            </div>
+
+            <div class="settings-group">
+                <h3>💬 微信推送</h3>
+                <p class="setting-desc">每日自动推送未完成事项到微信，二选一配置即可</p>
+
+                <div class="wechat-channel">
+                    <div class="channel-header" onclick="toggleChannel('serverchan')">
+                        <span class="channel-dot" id="dot-serverchan"></span>
+                        <span>Server酱</span>
+                        <span class="channel-arrow" id="arrow-serverchan">›</span>
+                    </div>
+                    <div class="channel-body" id="body-serverchan" style="display:none;">
+                        <div class="channel-step">
+                            <strong>1.</strong> 微信扫码关注「方糖」公众号<br>
+                            <a href="https://sct.ftqq.com/" target="_blank" class="link-btn">前往 sct.ftqq.com</a>
+                        </div>
+                        <div class="channel-step">
+                            <strong>2.</strong> 登录后复制你的 SendKey
+                        </div>
+                        <div class="form-field" style="margin:8px 0;">
+                            <input type="text" id="serverChanKey" placeholder="粘贴 SendKey" autocomplete="off">
+                        </div>
+                        <button class="btn-test" onclick="testServerChan()">测试发送</button>
+                    </div>
+                </div>
+
+                <div class="wechat-channel">
+                    <div class="channel-header" onclick="toggleChannel('wecom')">
+                        <span class="channel-dot" id="dot-wecom"></span>
+                        <span>企业微信机器人</span>
+                        <span class="channel-arrow" id="arrow-wecom">›</span>
+                    </div>
+                    <div class="channel-body" id="body-wecom" style="display:none;">
+                        <div class="channel-step">
+                            <strong>1.</strong> 在企业微信群中添加机器人
+                        </div>
+                        <div class="channel-step">
+                            <strong>2.</strong> 复制 Webhook 地址
+                        </div>
+                        <div class="form-field" style="margin:8px 0;">
+                            <input type="url" id="wecomWebhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." autocomplete="off">
+                        </div>
+                        <button class="btn-test" onclick="testWeCom()">测试发送</button>
+                    </div>
+                </div>
+
+                <div class="setting-row" style="margin-top:12px;">
+                    <span>自动推送</span>
+                    <label class="switch"><input type="checkbox" id="autoPushToggle" checked><span class="slider"></span></label>
+                </div>
+                <p class="setting-note">开启后，每天提醒时自动推送未完成事项到微信</p>
+            </div>
+
+            <div class="settings-group">
+                <h3>📤 手动推送</h3>
+                <button class="btn-push-now" onclick="pushNow()">
+                    立即推送未完成事项到微信
+                </button>
+            </div>
+
+            <div class="settings-group">
+                <h3>💾 数据</h3>
+                <button class="btn-outline" onclick="exportBackup()">📤 导出备份</button>
+                <button class="btn-danger-outline" onclick="clearData()">🗑️ 清空数据</button>
+            </div>
+
+            <div class="settings-group">
+                <h3>ℹ️ 关于</h3>
+                <div class="about-info">
+                    <p>工作备忘录 v1.0.0</p>
+                    <p>数据保存在手机本地，安全可靠</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部导航 -->
+        <nav class="tab-bar" id="tabBar">
+            <button class="tab-item active" onclick="switchTab('tasks', this)">
+                <span class="tab-icon">📝</span><span class="tab-label">事项</span>
+            </button>
+            <button class="tab-item" onclick="switchTab('progress', this)">
+                <span class="tab-icon">📊</span><span class="tab-label">进度</span>
+            </button>
+            <button class="tab-item" onclick="switchTab('report', this)">
+                <span class="tab-icon">📈</span><span class="tab-label">报告</span>
+            </button>
+            <button class="tab-item" onclick="switchTab('settings', this)">
+                <span class="tab-icon">⚙️</span><span class="tab-label">设置</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- 弹窗：添加任务 -->
+    <div class="modal-overlay" id="taskModal">
+        <div class="modal-sheet">
+            <div class="modal-handle"></div>
+            <h3>添加工作事项</h3>
+            <div class="form-field">
+                <input type="text" id="taskTitle" placeholder="事项标题" autocomplete="off">
+            </div>
+            <div class="form-field">
+                <textarea id="taskDesc" placeholder="详细描述（可选）" rows="3"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>分类</label>
+                    <select id="taskCategory"></select>
+                </div>
+                <div class="form-field">
+                    <label>优先级</label>
+                    <select id="taskPriority">
+                        <option value="high">高</option>
+                        <option value="medium" selected>中</option>
+                        <option value="low">低</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal('taskModal')">取消</button>
+                <button class="btn-confirm" onclick="submitTask()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：记录进度 -->
+    <div class="modal-overlay" id="progressModal">
+        <div class="modal-sheet">
+            <div class="modal-handle"></div>
+            <h3>记录工作进度</h3>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>日期</label>
+                    <input type="date" id="progressDate">
+                </div>
+                <div class="form-field">
+                    <label>关联事项</label>
+                    <select id="progressTask"><option value="">不关联</option></select>
+                </div>
+            </div>
+            <div class="form-field">
+                <textarea id="progressContent" placeholder="今天完成了什么工作？" rows="4"></textarea>
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal('progressModal')">取消</button>
+                <button class="btn-confirm" onclick="submitProgress()">记录</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
