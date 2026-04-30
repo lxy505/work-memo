@@ -6,7 +6,10 @@ let settings = {
     notifyEnabled: true,
     autoPush: true,
     serverChanKey: '',
-    wecomWebhook: ''
+    wecomWebhook: '',
+    pushplusToken: '',
+    wxpusherToken: '',
+    wxpusherUid: ''
 };
 let currentPage = 'tasks';
 let currentFilter = 'all';
@@ -354,8 +357,13 @@ function toggleChannel(name) {
 function updatePushDots() {
     const scKey = document.getElementById('serverChanKey').value.trim();
     const wcHook = document.getElementById('wecomWebhook').value.trim();
+    const ppToken = document.getElementById('pushplusToken').value.trim();
+    const wxToken = document.getElementById('wxpusherToken').value.trim();
+    const wxUid = document.getElementById('wxpusherUid').value.trim();
     document.getElementById('dot-serverchan').classList.toggle('active', !!scKey);
     document.getElementById('dot-wecom').classList.toggle('active', !!wcHook);
+    document.getElementById('dot-pushplus').classList.toggle('active', !!ppToken);
+    document.getElementById('dot-wxpusher').classList.toggle('active', !!(wxToken && wxUid));
 }
 
 async function testServerChan() {
@@ -395,6 +403,52 @@ async function testWeCom() {
         const data = await res.json();
         if (data.errcode === 0) showToast('✅ 发送成功，请查看企业微信');
         else showToast('❌ 发送失败：' + (data.errmsg || '未知错误'));
+    } catch (e) {
+        showToast('❌ 网络错误：' + e.message);
+    }
+}
+
+// PushPlus 测试
+async function testPushPlus() {
+    const token = document.getElementById('pushplusToken').value.trim();
+    if (!token) { showToast('请先输入 Token'); return; }
+    settings.pushplusToken = token;
+    saveSettings();
+    updatePushDots();
+    showToast('正在发送...');
+    try {
+        const res = await fetch('https://www.pushplus.plus/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, title: '工作备忘录测试', content: '这是一条测试消息，如果你在微信看到了，说明 PushPlus 配置成功！', template: 'html' })
+        });
+        const data = await res.json();
+        if (data.code === 200) showToast('✅ 发送成功，请查看微信');
+        else showToast('❌ 发送失败：' + (data.msg || '未知错误'));
+    } catch (e) {
+        showToast('❌ 网络错误：' + e.message);
+    }
+}
+
+// WxPusher 测试
+async function testWxPusher() {
+    const token = document.getElementById('wxpusherToken').value.trim();
+    const uid = document.getElementById('wxpusherUid').value.trim();
+    if (!token || !uid) { showToast('请先输入 Token 和 UID'); return; }
+    settings.wxpusherToken = token;
+    settings.wxpusherUid = uid;
+    saveSettings();
+    updatePushDots();
+    showToast('正在发送...');
+    try {
+        const res = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appToken: token, content: '这是一条测试消息，如果你在微信看到了，说明 WxPusher 配置成功！', contentType: 1, uids: [uid] })
+        });
+        const data = await res.json();
+        if (data.code === 1000) showToast('✅ 发送成功，请查看微信');
+        else showToast('❌ 发送失败：' + (data.msg || '未知错误'));
     } catch (e) {
         showToast('❌ 网络错误：' + e.message);
     }
@@ -463,6 +517,36 @@ async function pushViaWeCom(title, text) {
     } catch (e) { console.error('企业微信推送失败:', e); return false; }
 }
 
+// 通过 PushPlus 发送（免费，每天200条）
+async function pushViaPushPlus(title, text) {
+    if (!settings.pushplusToken) return false;
+    try {
+        const htmlText = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/---/g, '<hr>').replace(/\n/g, '<br>');
+        const res = await fetch('https://www.pushplus.plus/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: settings.pushplusToken, title, content: htmlText, template: 'html' })
+        });
+        const data = await res.json();
+        return data.code === 200;
+    } catch (e) { console.error('PushPlus推送失败:', e); return false; }
+}
+
+// 通过 WxPusher 发送（免费，无限条）
+async function pushViaWxPusher(title, text) {
+    if (!settings.wxpusherToken || !settings.wxpusherUid) return false;
+    try {
+        const htmlText = '<h3>' + title + '</h3>' + text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/---/g, '<hr>').replace(/\n/g, '<br>');
+        const res = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appToken: settings.wxpusherToken, content: htmlText, contentType: 1, uids: [settings.wxpusherUid] })
+        });
+        const data = await res.json();
+        return data.code === 1000;
+    } catch (e) { console.error('WxPusher推送失败:', e); return false; }
+}
+
 // 执行推送
 async function doPush() {
     const content = buildPushContent();
@@ -482,8 +566,20 @@ async function doPush() {
         if (ok) success = true;
     }
 
+    // PushPlus
+    if (settings.pushplusToken) {
+        const ok = await pushViaPushPlus(content.title, content.text);
+        if (ok) success = true;
+    }
+
+    // WxPusher
+    if (settings.wxpusherToken && settings.wxpusherUid) {
+        const ok = await pushViaWxPusher(content.title, content.text);
+        if (ok) success = true;
+    }
+
     if (success) showToast('✅ 已推送到微信');
-    else if (!settings.serverChanKey && !settings.wecomWebhook) showToast('⚠️ 请先在设置中配置微信推送');
+    else if (!settings.serverChanKey && !settings.wecomWebhook && !settings.pushplusToken && !settings.wxpusherToken) showToast('⚠️ 请先在设置中配置微信推送');
     else showToast('❌ 推送失败，请检查配置');
 }
 
@@ -524,7 +620,7 @@ function checkAndNotify() {
     showToast(`⏰ ${incomplete.length} 个事项未完成`);
 
     // 自动推送微信
-    if (settings.autoPush && (settings.serverChanKey || settings.wecomWebhook)) {
+    if (settings.autoPush && (settings.serverChanKey || settings.wecomWebhook || settings.pushplusToken || (settings.wxpusherToken && settings.wxpusherUid))) {
         doPush();
     }
 }
@@ -557,6 +653,9 @@ function updateSettingsUI() {
     document.getElementById('autoPushToggle').checked = settings.autoPush;
     document.getElementById('serverChanKey').value = settings.serverChanKey || '';
     document.getElementById('wecomWebhook').value = settings.wecomWebhook || '';
+    document.getElementById('pushplusToken').value = settings.pushplusToken || '';
+    document.getElementById('wxpusherToken').value = settings.wxpusherToken || '';
+    document.getElementById('wxpusherUid').value = settings.wxpusherUid || '';
     updatePushDots();
 }
 
@@ -566,6 +665,9 @@ function saveSettingsFromUI() {
     settings.autoPush = document.getElementById('autoPushToggle').checked;
     settings.serverChanKey = document.getElementById('serverChanKey').value.trim();
     settings.wecomWebhook = document.getElementById('wecomWebhook').value.trim();
+    settings.pushplusToken = document.getElementById('pushplusToken').value.trim();
+    settings.wxpusherToken = document.getElementById('wxpusherToken').value.trim();
+    settings.wxpusherUid = document.getElementById('wxpusherUid').value.trim();
     saveSettings();
     setupReminder();
     updatePushDots();
@@ -644,6 +746,6 @@ init();
 ['notifyToggle', 'autoPushToggle'].forEach(id => {
     document.getElementById(id).addEventListener('change', saveSettingsFromUI);
 });
-['notifyTime', 'serverChanKey', 'wecomWebhook'].forEach(id => {
+['notifyTime', 'serverChanKey', 'wecomWebhook', 'pushplusToken', 'wxpusherToken', 'wxpusherUid'].forEach(id => {
     document.getElementById(id).addEventListener('change', saveSettingsFromUI);
 });

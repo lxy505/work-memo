@@ -117,7 +117,7 @@
 
             <div class="settings-group">
                 <h3>💬 微信推送</h3>
-                <p class="setting-desc">每日自动推送未完成事项到微信，二选一配置即可</p>
+                <p class="setting-desc">每日自动推送未完成事项到微信，推荐 PushPlus 或 WxPusher（免费无限）</p>
 
                 <div class="wechat-channel">
                     <div class="channel-header" onclick="toggleChannel('serverchan')">
@@ -157,6 +157,51 @@
                             <input type="url" id="wecomWebhook" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." autocomplete="off">
                         </div>
                         <button class="btn-test" onclick="testWeCom()">测试发送</button>
+                    </div>
+                </div>
+
+                <div class="wechat-channel">
+                    <div class="channel-header" onclick="toggleChannel('pushplus')">
+                        <span class="channel-dot" id="dot-pushplus"></span>
+                        <span>PushPlus（推荐，免费200条/天）</span>
+                        <span class="channel-arrow" id="arrow-pushplus">›</span>
+                    </div>
+                    <div class="channel-body" id="body-pushplus" style="display:none;">
+                        <div class="channel-step">
+                            <strong>1.</strong> 微信扫码关注「PushPlus推送」公众号<br>
+                            <a href="https://www.pushplus.plus/" target="_blank" class="link-btn">前往 pushplus.plus</a>
+                        </div>
+                        <div class="channel-step">
+                            <strong>2.</strong> 登录后复制你的 Token
+                        </div>
+                        <div class="form-field" style="margin:8px 0;">
+                            <input type="text" id="pushplusToken" placeholder="粘贴 Token" autocomplete="off">
+                        </div>
+                        <button class="btn-test" onclick="testPushPlus()">测试发送</button>
+                    </div>
+                </div>
+
+                <div class="wechat-channel">
+                    <div class="channel-header" onclick="toggleChannel('wxpusher')">
+                        <span class="channel-dot" id="dot-wxpusher"></span>
+                        <span>WxPusher（免费无限）</span>
+                        <span class="channel-arrow" id="arrow-wxpusher">›</span>
+                    </div>
+                    <div class="channel-body" id="body-wxpusher" style="display:none;">
+                        <div class="channel-step">
+                            <strong>1.</strong> 微信扫码关注「WxPusher」公众号<br>
+                            <a href="https://wxpusher.zjiecode.com/" target="_blank" class="link-btn">前往 wxpusher.zjiecode.com</a>
+                        </div>
+                        <div class="channel-step">
+                            <strong>2.</strong> 创建应用，获取 AppToken 和你的 UID
+                        </div>
+                        <div class="form-field" style="margin:8px 0;">
+                            <input type="text" id="wxpusherToken" placeholder="AppToken" autocomplete="off">
+                        </div>
+                        <div class="form-field" style="margin:8px 0;">
+                            <input type="text" id="wxpusherUid" placeholder="你的 UID" autocomplete="off">
+                        </div>
+                        <button class="btn-test" onclick="testWxPusher()">测试发送</button>
                     </div>
                 </div>
 
