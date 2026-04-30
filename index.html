@@ -15,7 +15,7 @@
 <body>
     <div id="app">
         <header class="app-header" id="appHeader">
-            <h1 id="pageTitle">工作事项</h1>
+            <h1 id="pageTitle">工作事项 <small>作者：梁兴宇</small></h1>
             <div class="header-actions" id="headerActions">
                 <button class="icon-btn" id="voiceFab" onclick="toggleVoicePanel()">🎤</button>
                 <button class="icon-btn primary" id="addBtn" onclick="handleAdd()">+</button>
@@ -33,7 +33,7 @@
                     </div>
                 </div>
                 <p class="voice-status" id="voiceStatus">点击下方按钮开始说话</p>
-                <p class="voice-hint">例如："完成了登录页面的开发"</p>
+                <p class="voice-hint">说事项名添加工作，说"事项名完成XX%"更新进度</p>
                 <button class="voice-record-btn" id="voiceRecordBtn" onclick="toggleRecording()">
                     <span id="recordLabel">开始录音</span>
                 </button>
@@ -220,15 +220,37 @@
             </div>
 
             <div class="settings-group">
-                <h3>💾 数据</h3>
-                <button class="btn-outline" onclick="exportBackup()">📤 导出备份</button>
+                <h3>🔗 分享给朋友</h3>
+                <p class="setting-desc">将此应用分享给同事或朋友，他们也可以使用</p>
+                <button class="btn-share-app" onclick="shareApp()">
+                    📤 分享应用
+                </button>
+                <button class="btn-copy-link" onclick="copyAppLink()">
+                    📋 复制链接
+                </button>
+            </div>
+
+            <div class="settings-group">
+                <h3>♻️ 回收站</h3>
+                <p class="setting-desc">删除的事项可在5天内恢复</p>
+                <div id="recycleBinList"></div>
+                <button class="btn-outline" onclick="cleanExpiredRecycle()" id="cleanRecycleBtn" style="display:none;">🗑️ 清除已过期项</button>
+            </div>
+
+            <div class="settings-group">
+                <h3>💾 数据管理</h3>
+                <button class="btn-outline" onclick="exportBackup()">📤 导出备份(JSON)</button>
+                <button class="btn-outline" onclick="exportReadableText()">📄 导出可读文本</button>
+                <button class="btn-outline" onclick="importBackup()">📥 导入备份</button>
+                <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(event)">
                 <button class="btn-danger-outline" onclick="clearData()">🗑️ 清空数据</button>
             </div>
 
             <div class="settings-group">
                 <h3>ℹ️ 关于</h3>
                 <div class="about-info">
-                    <p>工作备忘录 v1.0.0</p>
+                    <p>工作备忘录 v2.0.0</p>
+                    <p>作者：梁兴宇</p>
                     <p>数据保存在手机本地，安全可靠</p>
                 </div>
             </div>
@@ -260,7 +282,7 @@
                 <input type="text" id="taskTitle" placeholder="事项标题" autocomplete="off">
             </div>
             <div class="form-field">
-                <textarea id="taskDesc" placeholder="详细描述（可选）" rows="3"></textarea>
+                <textarea id="taskDesc" placeholder="详细描述（可选）" rows="2"></textarea>
             </div>
             <div class="form-row">
                 <div class="form-field">
@@ -276,6 +298,13 @@
                     </select>
                 </div>
             </div>
+            <div class="form-field">
+                <label>初始进度</label>
+                <div class="progress-input-row">
+                    <input type="range" id="taskProgressSlider" min="0" max="100" value="0" oninput="document.getElementById('taskProgressVal').textContent=this.value+'%'">
+                    <span id="taskProgressVal" class="progress-val">0%</span>
+                </div>
+            </div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('taskModal')">取消</button>
                 <button class="btn-confirm" onclick="submitTask()">添加</button>
@@ -283,23 +312,29 @@
         </div>
     </div>
 
-    <!-- 弹窗：记录进度 -->
+    <!-- 弹窗：更新进度 -->
     <div class="modal-overlay" id="progressModal">
         <div class="modal-sheet">
             <div class="modal-handle"></div>
-            <h3>记录工作进度</h3>
-            <div class="form-row">
-                <div class="form-field">
-                    <label>日期</label>
-                    <input type="date" id="progressDate">
-                </div>
-                <div class="form-field">
-                    <label>关联事项</label>
-                    <select id="progressTask"><option value="">不关联</option></select>
+            <h3>更新工作进度</h3>
+            <div class="form-field">
+                <label>关联事项</label>
+                <select id="progressTask"></select>
+            </div>
+            <div class="form-field">
+                <label>进度</label>
+                <div class="progress-input-row">
+                    <input type="range" id="progressSlider" min="0" max="100" value="0" oninput="document.getElementById('progressVal').textContent=this.value+'%'">
+                    <span id="progressVal" class="progress-val">0%</span>
                 </div>
             </div>
             <div class="form-field">
-                <textarea id="progressContent" placeholder="今天完成了什么工作？" rows="4"></textarea>
+                <label>进度说明（可选）</label>
+                <input type="text" id="progressNote" placeholder="如：完成初稿" autocomplete="off">
+            </div>
+            <div class="form-field">
+                <label>日期</label>
+                <input type="date" id="progressDate">
             </div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('progressModal')">取消</button>

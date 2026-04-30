@@ -1,8 +1,8 @@
 {
   "name": "工作备忘录",
   "short_name": "备忘录",
-  "description": "智能工作备忘录 - 语音输入、周报月报、每日提醒",
-  "start_url": "/index.html",
+  "description": "智能工作备忘录 - 语音输入、进度追踪、周报月报、每日提醒",
+  "start_url": "./index.html",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#667eea",
@@ -21,6 +21,5 @@
       "purpose": "any maskable"
     }
   ],
-  "apple_touch_icon": "icons/apple-touch-icon.png",
   "categories": ["productivity", "business"]
 }

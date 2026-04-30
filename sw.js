@@ -1,13 +1,14 @@
-// Service Worker - 离线缓存
-const CACHE_NAME = 'work-memo-v1';
+// Service Worker - 离线缓存 v2
+const CACHE_NAME = 'work-memo-v2';
 const ASSETS = [
-    '/',
-    '/index.html',
-    '/style.css',
-    '/app.js',
-    '/manifest.json',
-    '/icons/icon-192.png',
-    '/icons/icon-512.png'
+    './',
+    './index.html',
+    './style.css',
+    './app.js',
+    './manifest.json',
+    './icons/icon-192.png',
+    './icons/icon-512.png',
+    './icons/apple-touch-icon.png'
 ];
 
 self.addEventListener('install', (event) => {

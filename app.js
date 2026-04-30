@@ -1,5 +1,5 @@
 /* ========== 全局状态 ========== */
-let appData = { tasks: [], progress: [] };
+let appData = { tasks: [], progress: [], recycleBin: [] };
 let settings = {
     categories: ['项目开发', '会议沟通', '文档撰写', '问题处理', '其他'],
     notifyTime: '17:00',
@@ -25,21 +25,33 @@ let lastRemindDate = '';
 function init() {
     loadData();
     loadSettings();
+    migrateData();
     initSpeechRecognition();
     renderAll();
     setupReminder();
     setDefaults();
     bindEvents();
+    cleanExpiredRecycle();
 }
 
 function loadData() {
-    try { const r = localStorage.getItem('wm_data'); if (r) appData = JSON.parse(r); } catch(e) {}
+    try { const r = localStorage.getItem('wm_data'); if (r) appData = { ...appData, ...JSON.parse(r) }; } catch(e) {}
 }
 function saveData() { localStorage.setItem('wm_data', JSON.stringify(appData)); }
 function loadSettings() {
     try { const r = localStorage.getItem('wm_settings'); if (r) settings = { ...settings, ...JSON.parse(r) }; } catch(e) {}
 }
 function saveSettings() { localStorage.setItem('wm_settings', JSON.stringify(settings)); }
+
+// 数据迁移：为旧任务添加progress字段
+function migrateData() {
+    let changed = false;
+    appData.tasks.forEach(t => {
+        if (t.progress === undefined) { t.progress = t.completed ? 100 : 0; changed = true; }
+    });
+    if (!appData.recycleBin) { appData.recycleBin = []; changed = true; }
+    if (changed) saveData();
+}
 
 function setDefaults() {
     const today = new Date().toISOString().split('T')[0];
@@ -60,6 +72,7 @@ function renderAll() {
     renderCategoryEditor();
     renderCalendar();
     renderProgress();
+    renderRecycleBin();
     updateSettingsUI();
 }
 
@@ -70,8 +83,18 @@ function switchTab(page, btn) {
     document.getElementById(page + 'Page').classList.add('active');
     document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
     if (btn) btn.classList.add('active');
-    const titles = { tasks: '工作事项', progress: '工作进度', report: '周报月报', settings: '设置' };
-    document.getElementById('pageTitle').textContent = titles[page];
+    const titles = {
+        tasks: '工作事项',
+        progress: '工作进度',
+        report: '周报月报',
+        settings: '设置'
+    };
+    const titleEl = document.getElementById('pageTitle');
+    if (page === 'tasks') {
+        titleEl.innerHTML = '工作事项 <small>作者：梁兴宇</small>';
+    } else {
+        titleEl.textContent = titles[page];
+    }
     document.getElementById('voiceFab').style.display = (page === 'progress' || page === 'tasks') ? 'flex' : 'none';
     if (page === 'progress') updateProgressTaskSelect();
 }
@@ -92,24 +115,98 @@ function initSpeechRecognition() {
         document.getElementById('voiceRing').classList.add('recording');
     };
     recognition.onresult = (e) => {
-        const text = e.results[0][0].transcript;
+        const text = e.results[0][0].transcript.trim();
         document.getElementById('voiceResult').textContent = '识别结果：' + text;
         document.getElementById('voiceResult').classList.add('show');
-        if (confirm('已识别：\n\n"' + text + '"\n\n添加为工作进度？')) {
-            const today = new Date().toISOString().split('T')[0];
-            let relTask = null;
-            for (const t of appData.tasks) {
-                if (!t.completed && text.includes(t.title.substring(0, Math.min(4, t.title.length)))) { relTask = t; break; }
+
+        // 判断是否为进度更新模式：匹配 "XXX完成YY%" "XXX完成了YY%" "XXX进度YY%"
+        const progressMatch = parseVoiceProgress(text);
+        if (progressMatch) {
+            handleVoiceProgress(progressMatch, text);
+        } else {
+            // 默认添加为工作事项
+            if (confirm('已识别：\n\n"' + text + '"\n\n添加为工作事项？')) {
+                addTaskFromVoice(text);
             }
-            appData.progress.push({ id: Date.now(), date: today, taskId: relTask ? relTask.id : null, content: text, createdAt: new Date().toISOString() });
-            saveData();
-            renderCalendar(); renderProgress();
-            showToast('✅ 已添加工作进度');
         }
         closeVoicePanel();
     };
     recognition.onerror = () => { showToast('语音识别失败'); stopRecordingUI(); };
     recognition.onend = () => stopRecordingUI();
+}
+
+// 解析语音中的进度信息
+function parseVoiceProgress(text) {
+    // 匹配模式：关键词+完成/进度+百分比
+    const patterns = [
+        /^(.+?)(?:完成(?:了)?|进度(?:为|是)?)\s*(\d+)\s*%\s*$/,
+        /^(.+?)\s+(\d+)\s*%\s*$/,
+        /^(.+?)(?:完成(?:了)?)\s*百\s*分\s*之\s*(\d+)\s*$/,
+    ];
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) {
+            return { keyword: match[1].trim(), progress: parseInt(match[2]) };
+        }
+    }
+    return null;
+}
+
+// 语音更新进度
+function handleVoiceProgress(parsed, rawText) {
+    const { keyword, progress: pct } = parsed;
+    const clampedPct = Math.max(0, Math.min(100, pct));
+
+    // 搜索匹配的事项
+    const matchedTasks = appData.tasks.filter(t =>
+        !t.completed && t.title.includes(keyword) || keyword.includes(t.title)
+    );
+
+    if (matchedTasks.length === 1) {
+        const task = matchedTasks[0];
+        if (confirm(`找到事项："${task.title}"\n将进度更新为 ${clampedPct}%，确认？`)) {
+            updateTaskProgress(task.id, clampedPct, '语音更新');
+            showToast(`✅ "${task.title}" 进度已更新为 ${clampedPct}%`);
+        }
+    } else if (matchedTasks.length > 1) {
+        // 多个匹配，让用户选择
+        const names = matchedTasks.map((t, i) => `${i + 1}. ${t.title}`).join('\n');
+        const choice = prompt(`找到多个匹配事项：\n${names}\n\n请输入序号（1-${matchedTasks.length}）：`);
+        const idx = parseInt(choice) - 1;
+        if (idx >= 0 && idx < matchedTasks.length) {
+            const task = matchedTasks[idx];
+            updateTaskProgress(task.id, clampedPct, '语音更新');
+            showToast(`✅ "${task.title}" 进度已更新为 ${clampedPct}%`);
+        }
+    } else {
+        // 没有匹配，询问是否新建
+        if (confirm(`未找到包含"${keyword}"的事项\n\n是否新建事项"${keyword}"，进度${clampedPct}%？`)) {
+            const newTask = {
+                id: Date.now(), title: keyword, desc: '',
+                category: settings.categories[0] || '其他',
+                priority: 'medium', progress: clampedPct,
+                completed: clampedPct >= 100,
+                createdAt: new Date().toISOString()
+            };
+            appData.tasks.push(newTask);
+            addProgressEntry(newTask.id, clampedPct, '语音创建');
+            saveData(); renderTasks(); renderCalendar(); renderProgress();
+            showToast(`✅ 已添加"${keyword}"，进度 ${clampedPct}%`);
+        }
+    }
+}
+
+// 语音添加事项
+function addTaskFromVoice(text) {
+    const newTask = {
+        id: Date.now(), title: text, desc: '',
+        category: settings.categories[0] || '其他',
+        priority: 'medium', progress: 0,
+        completed: false, createdAt: new Date().toISOString()
+    };
+    appData.tasks.push(newTask);
+    saveData(); renderTasks();
+    showToast('✅ 已添加工作事项');
 }
 
 function stopRecordingUI() {
@@ -136,8 +233,12 @@ function renderTasks() {
     if (currentCat) tasks = tasks.filter(t => t.category === currentCat);
     const pO = { high: 0, medium: 1, low: 2 };
     tasks.sort((a, b) => { if (a.completed !== b.completed) return a.completed ? 1 : -1; return pO[a.priority] - pO[b.priority]; });
-    if (!tasks.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📝</div><h4>暂无工作事项</h4><p>点击右上角 + 添加</p></div>'; return; }
-    list.innerHTML = tasks.map(t => `
+    if (!tasks.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📝</div><h4>暂无工作事项</h4><p>点击右上角 + 或用🎤语音添加</p></div>'; return; }
+    list.innerHTML = tasks.map(t => {
+        const pct = t.progress || 0;
+        const isComplete = pct >= 100;
+        const fillClass = isComplete ? 'complete' : '';
+        return `
         <div class="task-card ${t.priority} ${t.completed ? 'done' : ''}">
             <div class="task-check ${t.completed ? 'checked' : ''}" onclick="toggleTask(${t.id})">${t.completed ? '✓' : ''}</div>
             <div class="task-body">
@@ -147,9 +248,22 @@ function renderTasks() {
                     ${t.category ? `<span class="tag tag-cat">${esc(t.category)}</span>` : ''}
                     <span class="tag tag-${t.priority}">${t.priority === 'high' ? '高' : t.priority === 'medium' ? '中' : '低'}优先级</span>
                 </div>
+                <div class="task-progress-bar" onclick="openProgressUpdate(${t.id})">
+                    <div class="progress-bar-bg">
+                        <div class="progress-bar-fill ${fillClass}" style="width:${pct}%"></div>
+                    </div>
+                    <div class="progress-bar-label">
+                        <span>点击更新进度</span>
+                        <span class="pct ${fillClass}">${pct}%</span>
+                    </div>
+                </div>
+                <div class="task-actions">
+                    <button class="task-action-btn progress-btn" onclick="openProgressUpdate(${t.id})">📊 更新进度</button>
+                </div>
             </div>
             <button class="task-delete" onclick="deleteTask(${t.id})">×</button>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 }
 
 function filterTasks(filter, btn) {
@@ -175,28 +289,110 @@ function handleAdd() {
 function submitTask() {
     const title = document.getElementById('taskTitle').value.trim();
     if (!title) { showToast('请输入标题'); return; }
+    const progress = parseInt(document.getElementById('taskProgressSlider').value) || 0;
     appData.tasks.push({
         id: Date.now(), title,
         desc: document.getElementById('taskDesc').value.trim(),
         category: document.getElementById('taskCategory').value,
         priority: document.getElementById('taskPriority').value,
-        completed: false, createdAt: new Date().toISOString()
+        progress: progress,
+        completed: progress >= 100,
+        createdAt: new Date().toISOString()
     });
+    if (progress > 0) {
+        addProgressEntry(Date.now(), progress, '创建时设置');
+    }
     saveData();
     document.getElementById('taskTitle').value = '';
     document.getElementById('taskDesc').value = '';
+    document.getElementById('taskProgressSlider').value = 0;
+    document.getElementById('taskProgressVal').textContent = '0%';
     closeModal('taskModal');
-    renderTasks();
+    renderTasks(); renderCalendar(); renderProgress();
     showToast('✅ 已添加');
 }
 
-function toggleTask(id) { const t = appData.tasks.find(x => x.id === id); if (t) { t.completed = !t.completed; saveData(); renderTasks(); } }
-function deleteTask(id) { appData.tasks = appData.tasks.filter(t => t.id !== id); saveData(); renderTasks(); }
+function toggleTask(id) {
+    const t = appData.tasks.find(x => x.id === id);
+    if (t) {
+        t.completed = !t.completed;
+        if (t.completed) {
+            t.progress = 100;
+            addProgressEntry(t.id, 100, '标记完成');
+        }
+        saveData(); renderTasks(); renderProgress();
+    }
+}
+
+// 删除任务（进入回收站）
+function deleteTask(id) {
+    const t = appData.tasks.find(x => x.id === id);
+    if (!t) return;
+    if (!confirm(`确定删除"${t.title}"？\n可在5天内从回收站恢复`)) return;
+    appData.recycleBin.push({
+        id: t.id,
+        task: { ...t },
+        deletedAt: new Date().toISOString()
+    });
+    appData.tasks = appData.tasks.filter(x => x.id !== id);
+    saveData(); renderTasks(); renderRecycleBin();
+    showToast('已移至回收站');
+}
+
+// 更新事项进度
+function updateTaskProgress(taskId, pct, note) {
+    const t = appData.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    const oldPct = t.progress || 0;
+    t.progress = Math.max(0, Math.min(100, pct));
+    if (t.progress >= 100) {
+        t.completed = true;
+        t.progress = 100;
+    } else {
+        t.completed = false;
+    }
+    addProgressEntry(taskId, t.progress, note || `进度更新：${oldPct}% → ${t.progress}%`);
+    saveData(); renderTasks(); renderProgress(); renderCalendar();
+}
+
+// 添加进度记录
+function addProgressEntry(taskId, progress, note) {
+    const today = new Date().toISOString().split('T')[0];
+    appData.progress.push({
+        id: Date.now() + Math.random(),
+        taskId: taskId,
+        date: today,
+        progress: progress,
+        note: note || '',
+        createdAt: new Date().toISOString()
+    });
+}
+
+// 点击进度条打开更新弹窗
+function openProgressUpdate(taskId) {
+    const t = appData.tasks.find(x => x.id === taskId);
+    if (!t) return;
+    updateProgressTaskSelect();
+    document.getElementById('progressTask').value = taskId;
+    document.getElementById('progressSlider').value = t.progress || 0;
+    document.getElementById('progressVal').textContent = (t.progress || 0) + '%';
+    document.getElementById('progressNote').value = '';
+    showModal('progressModal');
+}
 
 // ========== 工作进度 ==========
 function updateProgressTaskSelect() {
-    document.getElementById('progressTask').innerHTML = '<option value="">不关联</option>' +
-        appData.tasks.filter(t => !t.completed).map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join('');
+    document.getElementById('progressTask').innerHTML =
+        appData.tasks.filter(t => !t.completed).map(t => `<option value="${t.id}">${esc(t.title)} (${t.progress || 0}%)</option>`).join('');
+    // 监听选择变化，更新滑块
+    const sel = document.getElementById('progressTask');
+    sel.onchange = function() {
+        const t = appData.tasks.find(x => x.id === parseInt(this.value));
+        if (t) {
+            document.getElementById('progressSlider').value = t.progress || 0;
+            document.getElementById('progressVal').textContent = (t.progress || 0) + '%';
+        }
+    };
 }
 
 function renderCalendar() {
@@ -217,39 +413,120 @@ function renderCalendar() {
 }
 
 function changeWeek(offset) { currentWeekStart.setDate(currentWeekStart.getDate() + offset * 7); renderCalendar(); renderProgress(); }
-function addProgressForDate(date) { document.getElementById('progressDate').value = date; updateProgressTaskSelect(); showModal('progressModal'); }
+function addProgressForDate(date) {
+    updateProgressTaskSelect();
+    document.getElementById('progressDate').value = date;
+    showModal('progressModal');
+}
 
 function renderProgress() {
     const list = document.getElementById('progressList');
     const end = new Date(currentWeekStart); end.setDate(end.getDate() + 6);
     let items = appData.progress.filter(p => p.date >= currentWeekStart.toISOString().split('T')[0] && p.date <= end.toISOString().split('T')[0]);
     items.sort((a, b) => b.date.localeCompare(a.date) || b.id - a.id);
-    if (!items.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><h4>本周暂无记录</h4><p>点击日期或 + 添加</p></div>'; return; }
+    if (!items.length) { list.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><h4>本周暂无进度记录</h4><p>点击日期或事项的进度条添加</p></div>'; return; }
     list.innerHTML = items.map(p => {
         const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
+        // 也在回收站里找
+        const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
+        const taskName = task ? task.title : (recycled ? recycled.task.title : null);
+        const isComplete = p.progress >= 100;
         return `<div class="progress-card">
             <div class="progress-date">${p.date} ${getWeekday(p.date)}</div>
-            ${task ? `<div class="progress-ref">${esc(task.title)}</div>` : ''}
-            <div class="progress-text">${esc(p.content)}</div>
+            ${taskName ? `<div class="progress-ref">${esc(taskName)}</div>` : ''}
+            <div class="progress-text">
+                ${p.note ? esc(p.note) + ' ' : ''}<span class="progress-pct ${isComplete ? 'complete' : ''}">${p.progress}%</span>
+            </div>
             <button class="progress-del" onclick="deleteProgress(${p.id})">×</button></div>`;
     }).join('');
 }
 
 function submitProgress() {
+    const taskId = parseInt(document.getElementById('progressTask').value);
+    const progress = parseInt(document.getElementById('progressSlider').value);
+    const note = document.getElementById('progressNote').value.trim();
     const date = document.getElementById('progressDate').value;
-    const content = document.getElementById('progressContent').value.trim();
-    if (!date || !content) { showToast('请填写日期和内容'); return; }
-    const taskId = document.getElementById('progressTask').value;
-    appData.progress.push({ id: Date.now(), date, taskId: taskId ? parseInt(taskId) : null, content, createdAt: new Date().toISOString() });
+    if (!taskId) { showToast('请选择关联事项'); return; }
+    if (!date) { showToast('请选择日期'); return; }
+
+    // 更新任务进度
+    const t = appData.tasks.find(x => x.id === taskId);
+    if (t) {
+        t.progress = progress;
+        if (progress >= 100) { t.completed = true; t.progress = 100; }
+        else { t.completed = false; }
+    }
+
+    // 添加进度记录
+    appData.progress.push({
+        id: Date.now() + Math.random(),
+        taskId: taskId,
+        date: date,
+        progress: progress,
+        note: note || `进度更新为${progress}%`,
+        createdAt: new Date().toISOString()
+    });
+
     saveData();
-    document.getElementById('progressContent').value = '';
-    document.getElementById('progressTask').value = '';
+    document.getElementById('progressNote').value = '';
     closeModal('progressModal');
-    renderCalendar(); renderProgress();
+    renderTasks(); renderCalendar(); renderProgress();
     showToast('✅ 已记录');
 }
 
-function deleteProgress(id) { appData.progress = appData.progress.filter(p => p.id !== id); saveData(); renderCalendar(); renderProgress(); }
+function deleteProgress(id) {
+    appData.progress = appData.progress.filter(p => p.id !== id);
+    saveData(); renderCalendar(); renderProgress();
+}
+
+// ========== 回收站 ==========
+function renderRecycleBin() {
+    const container = document.getElementById('recycleBinList');
+    const btn = document.getElementById('cleanRecycleBtn');
+    if (!appData.recycleBin || !appData.recycleBin.length) {
+        container.innerHTML = '<p style="font-size:13px;color:var(--text2);">回收站为空</p>';
+        if (btn) btn.style.display = 'none';
+        return;
+    }
+    if (btn) btn.style.display = 'block';
+    const now = new Date();
+    container.innerHTML = appData.recycleBin.map(r => {
+        const delDate = new Date(r.deletedAt);
+        const daysLeft = 5 - Math.floor((now - delDate) / 86400000);
+        const leftText = daysLeft > 0 ? `剩余${daysLeft}天` : '已过期';
+        return `<div class="recycle-item">
+            <div class="recycle-info">
+                <div class="recycle-title">${esc(r.task.title)}</div>
+                <div class="recycle-time">删除于 ${delDate.toLocaleDateString('zh-CN')} | ${leftText}</div>
+            </div>
+            ${daysLeft > 0 ? `<button class="recycle-restore" onclick="restoreTask(${r.id})">恢复</button>` : ''}
+        </div>`;
+    }).join('');
+}
+
+function restoreTask(taskId) {
+    const idx = appData.recycleBin.findIndex(r => r.id === taskId);
+    if (idx === -1) return;
+    const item = appData.recycleBin[idx];
+    appData.tasks.push(item.task);
+    appData.recycleBin.splice(idx, 1);
+    saveData(); renderTasks(); renderRecycleBin();
+    showToast('✅ 已恢复');
+}
+
+function cleanExpiredRecycle() {
+    const now = new Date();
+    const before = appData.recycleBin.length;
+    appData.recycleBin = appData.recycleBin.filter(r => {
+        const days = (now - new Date(r.deletedAt)) / 86400000;
+        return days < 5;
+    });
+    if (appData.recycleBin.length < before) {
+        saveData();
+        showToast(`已清除${before - appData.recycleBin.length}条过期记录`);
+    }
+    renderRecycleBin();
+}
 
 // ========== 周报月报 ==========
 function switchReport(type, btn) {
@@ -271,7 +548,9 @@ function generateWeekly() {
         const ds = d.toISOString().split('T')[0];
         appData.progress.filter(p => p.date === ds).forEach(p => {
             const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
-            items.push({ date: ds, weekday: getWeekday(ds), content: p.content, taskName: task ? task.title : null, category: task ? task.category : '' });
+            const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
+            const taskName = task ? task.title : (recycled ? recycled.task.title : null);
+            items.push({ date: ds, weekday: getWeekday(ds), content: p.note || `进度${p.progress}%`, taskName, category: task ? task.category : '', progress: p.progress });
         });
     }
     renderReportItems(items);
@@ -288,7 +567,9 @@ function generateMonthly() {
         const ds = d.toISOString().split('T')[0];
         appData.progress.filter(p => p.date === ds).forEach(p => {
             const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
-            items.push({ date: ds, weekday: getWeekday(ds), content: p.content, taskName: task ? task.title : null, category: task ? task.category : '其他' });
+            const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
+            const taskName = task ? task.title : (recycled ? recycled.task.title : null);
+            items.push({ date: ds, weekday: getWeekday(ds), content: p.note || `进度${p.progress}%`, taskName, category: task ? task.category : '其他', progress: p.progress });
         });
     }
     renderReportItems(items, true);
@@ -312,7 +593,7 @@ function renderReportItems(items, isMonthly = false) {
     Object.entries(grouped).forEach(([date, dayItems]) => {
         html += `<div class="report-day"><div class="report-day-title">${date} ${dayItems[0].weekday}</div>`;
         dayItems.forEach((item, i) => {
-            html += `<div class="report-item">${i + 1}. ${esc(item.content)}${item.taskName ? `<span style="color:#667eea;font-size:12px;"> 【${esc(item.taskName)}】</span>` : ''}</div>`;
+            html += `<div class="report-item">${i + 1}. ${esc(item.content)}${item.taskName ? `<span style="color:#667eea;font-size:12px;"> 【${esc(item.taskName)}】</span>` : ''}<span style="color:#48bb78;font-size:12px;font-weight:600;"> ${item.progress}%</span></div>`;
         });
         html += '</div>';
     });
@@ -321,8 +602,8 @@ function renderReportItems(items, isMonthly = false) {
 
 function exportExcel() {
     if (!window._reportData || !window._reportData.length) { showToast('请先生成报告'); return; }
-    const headers = ['日期', '星期', '工作内容', '关联事项', '分类'];
-    const rows = window._reportData.map(i => [i.date, i.weekday, i.content, i.taskName || '-', i.category || '-']);
+    const headers = ['日期', '星期', '工作内容', '关联事项', '分类', '进度'];
+    const rows = window._reportData.map(i => [i.date, i.weekday, i.content, i.taskName || '-', i.category || '-', i.progress + '%']);
     const csv = '\uFEFF' + [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     downloadFile(csv, `工作${reportType === 'weekly' ? '周报' : '月报'}_${window._reportLabel || ''}.csv`, 'text/csv;charset=utf-8');
     showToast('✅ 已导出');
@@ -331,10 +612,9 @@ function exportExcel() {
 function shareToWechat() {
     if (!window._reportData || !window._reportData.length) { showToast('请先生成报告'); return; }
     if (navigator.share) {
-        const text = window._reportData.map(i => `${i.date} ${i.weekday}: ${i.content}${i.taskName ? ' 【' + i.taskName + '】' : ''}`).join('\n');
-        // 生成文件
-        const headers = ['日期', '星期', '工作内容', '关联事项', '分类'];
-        const rows = window._reportData.map(i => [i.date, i.weekday, i.content, i.taskName || '-', i.category || '-']);
+        const text = window._reportData.map(i => `${i.date} ${i.weekday}: ${i.content}${i.taskName ? ' 【' + i.taskName + '】' : ''} ${i.progress}%`).join('\n');
+        const headers = ['日期', '星期', '工作内容', '关联事项', '分类', '进度'];
+        const rows = window._reportData.map(i => [i.date, i.weekday, i.content, i.taskName || '-', i.category || '-', i.progress + '%']);
         const csv = '\uFEFF' + [headers, ...rows].map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
         const file = new File([csv], `工作${reportType === 'weekly' ? '周报' : '月报'}.csv`, { type: 'text/csv' });
         navigator.share({ title: `工作${reportType === 'weekly' ? '周报' : '月报'}`, text, files: [file] }).catch(() => {
@@ -343,6 +623,129 @@ function shareToWechat() {
     } else {
         exportExcel();
     }
+}
+
+// ========== 分享应用 ==========
+function shareApp() {
+    const url = 'https://lxy505.github.io/work-memo/';
+    const title = '工作备忘录 - 智能工作管理工具';
+    const text = '推荐你使用这个工作备忘录应用！可以记录工作事项、追踪进度、生成周报月报，还能语音输入和微信推送。';
+    if (navigator.share) {
+        navigator.share({ title, text, url }).catch(() => {});
+    } else {
+        copyAppLink();
+    }
+}
+
+function copyAppLink() {
+    const url = 'https://lxy505.github.io/work-memo/';
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(url).then(() => showToast('✅ 链接已复制'));
+    } else {
+        const input = document.createElement('input');
+        input.value = url; document.body.appendChild(input);
+        input.select(); document.execCommand('copy');
+        document.body.removeChild(input);
+        showToast('✅ 链接已复制');
+    }
+}
+
+// ========== 可读文本导出 ==========
+function exportReadableText() {
+    let text = '═══════════════════════════════════\n';
+    text += '        工作备忘录 数据导出\n';
+    text += '        作者：梁兴宇\n';
+    text += '        导出时间：' + new Date().toLocaleString('zh-CN') + '\n';
+    text += '═══════════════════════════════════\n\n';
+
+    // 工作事项
+    text += '【工作事项】\n';
+    text += '───────────────────────────────────\n';
+    if (appData.tasks.length === 0) {
+        text += '  （暂无事项）\n';
+    } else {
+        appData.tasks.forEach((t, i) => {
+            text += `  ${i + 1}. ${t.title}\n`;
+            if (t.desc) text += `     描述：${t.desc}\n`;
+            text += `     分类：${t.category || '无'} | 优先级：${t.priority === 'high' ? '高' : t.priority === 'medium' ? '中' : '低'} | 进度：${t.progress || 0}% | 状态：${t.completed ? '已完成' : '进行中'}\n`;
+            text += `     创建时间：${new Date(t.createdAt).toLocaleString('zh-CN')}\n`;
+            if (i < appData.tasks.length - 1) text += '\n';
+        });
+    }
+    text += '\n';
+
+    // 进度记录
+    text += '【进度记录】\n';
+    text += '───────────────────────────────────\n';
+    if (appData.progress.length === 0) {
+        text += '  （暂无记录）\n';
+    } else {
+        const sorted = [...appData.progress].sort((a, b) => b.date.localeCompare(a.date));
+        sorted.forEach((p, i) => {
+            const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
+            const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
+            const taskName = task ? task.title : (recycled ? recycled.task.title : '未知');
+            text += `  ${i + 1}. [${p.date}] ${taskName}\n`;
+            text += `     进度：${p.progress}% | 说明：${p.note || '无'}\n`;
+            if (i < sorted.length - 1) text += '\n';
+        });
+    }
+    text += '\n';
+
+    // 统计
+    const total = appData.tasks.length;
+    const completed = appData.tasks.filter(t => t.completed).length;
+    const pending = total - completed;
+    const avgProgress = total > 0 ? Math.round(appData.tasks.reduce((s, t) => s + (t.progress || 0), 0) / total) : 0;
+    text += '【统计概览】\n';
+    text += '───────────────────────────────────\n';
+    text += `  总事项数：${total}\n`;
+    text += `  已完成：${completed}\n`;
+    text += `  进行中：${pending}\n`;
+    text += `  平均进度：${avgProgress}%\n`;
+    text += '\n═══════════════════════════════════\n';
+
+    downloadFile(text, `工作备忘录_${new Date().toISOString().split('T')[0]}.txt`, 'text/plain;charset=utf-8');
+    showToast('✅ 已导出可读文本');
+}
+
+// ========== 备份导入导出 ==========
+function exportBackup() {
+    const data = JSON.stringify({ data: appData, settings }, null, 2);
+    downloadFile(data, `备忘录备份_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
+    showToast('✅ 已导出备份');
+}
+
+function importBackup() {
+    document.getElementById('importFile').click();
+}
+
+function handleImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const imported = JSON.parse(e.target.result);
+            if (imported.data) {
+                if (!confirm('导入将覆盖当前所有数据，确定继续？')) return;
+                appData = { ...appData, ...imported.data };
+                if (imported.settings) {
+                    settings = { ...settings, ...imported.settings };
+                    saveSettings();
+                }
+                saveData();
+                renderAll();
+                showToast('✅ 导入成功');
+            } else {
+                showToast('❌ 文件格式不正确');
+            }
+        } catch (err) {
+            showToast('❌ 导入失败：文件格式错误');
+        }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
 }
 
 // ========== 微信推送 ==========
@@ -370,8 +773,7 @@ async function testServerChan() {
     const key = document.getElementById('serverChanKey').value.trim();
     if (!key) { showToast('请先输入 SendKey'); return; }
     settings.serverChanKey = key;
-    saveSettings();
-    updatePushDots();
+    saveSettings(); updatePushDots();
     showToast('正在发送...');
     try {
         const res = await fetch(`https://sctapi.ftqq.com/${key}.send`, {
@@ -382,17 +784,14 @@ async function testServerChan() {
         const data = await res.json();
         if (data.code === 0) showToast('✅ 发送成功，请查看微信');
         else showToast('❌ 发送失败：' + (data.message || '未知错误'));
-    } catch (e) {
-        showToast('❌ 网络错误：' + e.message);
-    }
+    } catch (e) { showToast('❌ 网络错误：' + e.message); }
 }
 
 async function testWeCom() {
     const webhook = document.getElementById('wecomWebhook').value.trim();
     if (!webhook) { showToast('请先输入 Webhook 地址'); return; }
     settings.wecomWebhook = webhook;
-    saveSettings();
-    updatePushDots();
+    saveSettings(); updatePushDots();
     showToast('正在发送...');
     try {
         const res = await fetch(webhook, {
@@ -403,18 +802,14 @@ async function testWeCom() {
         const data = await res.json();
         if (data.errcode === 0) showToast('✅ 发送成功，请查看企业微信');
         else showToast('❌ 发送失败：' + (data.errmsg || '未知错误'));
-    } catch (e) {
-        showToast('❌ 网络错误：' + e.message);
-    }
+    } catch (e) { showToast('❌ 网络错误：' + e.message); }
 }
 
-// PushPlus 测试
 async function testPushPlus() {
     const token = document.getElementById('pushplusToken').value.trim();
     if (!token) { showToast('请先输入 Token'); return; }
     settings.pushplusToken = token;
-    saveSettings();
-    updatePushDots();
+    saveSettings(); updatePushDots();
     showToast('正在发送...');
     try {
         const res = await fetch('https://www.pushplus.plus/send', {
@@ -425,20 +820,16 @@ async function testPushPlus() {
         const data = await res.json();
         if (data.code === 200) showToast('✅ 发送成功，请查看微信');
         else showToast('❌ 发送失败：' + (data.msg || '未知错误'));
-    } catch (e) {
-        showToast('❌ 网络错误：' + e.message);
-    }
+    } catch (e) { showToast('❌ 网络错误：' + e.message); }
 }
 
-// WxPusher 测试
 async function testWxPusher() {
     const token = document.getElementById('wxpusherToken').value.trim();
     const uid = document.getElementById('wxpusherUid').value.trim();
     if (!token || !uid) { showToast('请先输入 Token 和 UID'); return; }
     settings.wxpusherToken = token;
     settings.wxpusherUid = uid;
-    saveSettings();
-    updatePushDots();
+    saveSettings(); updatePushDots();
     showToast('正在发送...');
     try {
         const res = await fetch('https://wxpusher.zjiecode.com/api/send/message', {
@@ -449,9 +840,7 @@ async function testWxPusher() {
         const data = await res.json();
         if (data.code === 1000) showToast('✅ 发送成功，请查看微信');
         else showToast('❌ 发送失败：' + (data.msg || '未知错误'));
-    } catch (e) {
-        showToast('❌ 网络错误：' + e.message);
-    }
+    } catch (e) { showToast('❌ 网络错误：' + e.message); }
 }
 
 // 构造推送内容
@@ -468,7 +857,7 @@ function buildPushContent() {
 
     const pLabel = { high: '🔴', medium: '🟡', low: '🟢' };
     incomplete.forEach((t, i) => {
-        text += `${i + 1}. ${pLabel[t.priority] || ''} ${t.title}`;
+        text += `${i + 1}. ${pLabel[t.priority] || ''} ${t.title} (${t.progress || 0}%)`;
         if (t.category) text += ` [${t.category}]`;
         text += '\n';
     });
@@ -479,7 +868,8 @@ function buildPushContent() {
     if (todayProgress.length > 0) {
         text += `\n---\n**今日进度**（${todayProgress.length} 条）：\n\n`;
         todayProgress.forEach((p, i) => {
-            text += `${i + 1}. ${p.content}\n`;
+            const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
+            text += `${i + 1}. ${task ? task.title + ' ' : ''}${p.progress}%${p.note ? ' - ' + p.note : ''}\n`;
         });
     }
 
@@ -488,7 +878,6 @@ function buildPushContent() {
     return { title, text };
 }
 
-// 通过 Server酱 发送
 async function pushViaServerChan(title, text) {
     if (!settings.serverChanKey) return false;
     try {
@@ -502,7 +891,6 @@ async function pushViaServerChan(title, text) {
     } catch (e) { console.error('Server酱推送失败:', e); return false; }
 }
 
-// 通过 企业微信 发送
 async function pushViaWeCom(title, text) {
     if (!settings.wecomWebhook) return false;
     try {
@@ -517,7 +905,6 @@ async function pushViaWeCom(title, text) {
     } catch (e) { console.error('企业微信推送失败:', e); return false; }
 }
 
-// 通过 PushPlus 发送（免费，每天200条）
 async function pushViaPushPlus(title, text) {
     if (!settings.pushplusToken) return false;
     try {
@@ -532,7 +919,6 @@ async function pushViaPushPlus(title, text) {
     } catch (e) { console.error('PushPlus推送失败:', e); return false; }
 }
 
-// 通过 WxPusher 发送（免费，无限条）
 async function pushViaWxPusher(title, text) {
     if (!settings.wxpusherToken || !settings.wxpusherUid) return false;
     try {
@@ -547,67 +933,39 @@ async function pushViaWxPusher(title, text) {
     } catch (e) { console.error('WxPusher推送失败:', e); return false; }
 }
 
-// 执行推送
 async function doPush() {
     const content = buildPushContent();
     if (!content) { showToast('所有事项都已完成 👍'); return; }
-
     let success = false;
-
-    // Server酱
-    if (settings.serverChanKey) {
-        const ok = await pushViaServerChan(content.title, content.text);
-        if (ok) success = true;
-    }
-
-    // 企业微信
-    if (settings.wecomWebhook) {
-        const ok = await pushViaWeCom(content.title, content.text);
-        if (ok) success = true;
-    }
-
-    // PushPlus
-    if (settings.pushplusToken) {
-        const ok = await pushViaPushPlus(content.title, content.text);
-        if (ok) success = true;
-    }
-
-    // WxPusher
-    if (settings.wxpusherToken && settings.wxpusherUid) {
-        const ok = await pushViaWxPusher(content.title, content.text);
-        if (ok) success = true;
-    }
-
+    if (settings.serverChanKey) { const ok = await pushViaServerChan(content.title, content.text); if (ok) success = true; }
+    if (settings.wecomWebhook) { const ok = await pushViaWeCom(content.title, content.text); if (ok) success = true; }
+    if (settings.pushplusToken) { const ok = await pushViaPushPlus(content.title, content.text); if (ok) success = true; }
+    if (settings.wxpusherToken && settings.wxpusherUid) { const ok = await pushViaWxPusher(content.title, content.text); if (ok) success = true; }
     if (success) showToast('✅ 已推送到微信');
     else if (!settings.serverChanKey && !settings.wecomWebhook && !settings.pushplusToken && !settings.wxpusherToken) showToast('⚠️ 请先在设置中配置微信推送');
     else showToast('❌ 推送失败，请检查配置');
 }
 
-// 手动推送
 function pushNow() { doPush(); }
 
 // ========== 定时提醒 ==========
 function setupReminder() {
     if (reminderTimer) clearInterval(reminderTimer);
     if (!settings.notifyEnabled) return;
-
     reminderTimer = setInterval(() => {
         const now = new Date();
         const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
         const todayStr = now.toISOString().split('T')[0];
-
         if (timeStr === settings.notifyTime && lastRemindDate !== todayStr) {
             lastRemindDate = todayStr;
             checkAndNotify();
         }
-    }, 30000); // 30秒检查一次
+    }, 30000);
 }
 
 function checkAndNotify() {
     const incomplete = appData.tasks.filter(t => !t.completed);
     if (incomplete.length === 0) return;
-
-    // 浏览器通知
     if ('Notification' in window && Notification.permission === 'granted') {
         new Notification('⏰ 工作提醒', {
             body: `您有 ${incomplete.length} 个未完成事项`,
@@ -615,11 +973,7 @@ function checkAndNotify() {
             tag: 'work-reminder'
         });
     }
-
-    // 应用内提醒
     showToast(`⏰ ${incomplete.length} 个事项未完成`);
-
-    // 自动推送微信
     if (settings.autoPush && (settings.serverChanKey || settings.wecomWebhook || settings.pushplusToken || (settings.wxpusherToken && settings.wxpusherUid))) {
         doPush();
     }
@@ -674,15 +1028,9 @@ function saveSettingsFromUI() {
     renderCategoryBar();
 }
 
-function exportBackup() {
-    const data = JSON.stringify({ data: appData, settings }, null, 2);
-    downloadFile(data, `备忘录备份_${new Date().toISOString().split('T')[0]}.json`, 'application/json');
-    showToast('✅ 已导出备份');
-}
-
 function clearData() {
-    if (!confirm('确定清空所有数据？此操作不可恢复！')) return;
-    appData = { tasks: [], progress: [] };
+    if (!confirm('确定清空所有数据？已删除的事项将从回收站一起清除！')) return;
+    appData = { tasks: [], progress: [], recycleBin: [] };
     saveData(); renderAll();
     showToast('已清空');
 }
