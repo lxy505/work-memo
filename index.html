@@ -232,6 +232,29 @@
             </div>
 
             <div class="settings-group">
+                <h3>💾 自动备份</h3>
+                <div class="setting-row">
+                    <span>启用自动备份</span>
+                    <label class="switch"><input type="checkbox" id="autoBackupToggle" checked><span class="slider"></span></label>
+                </div>
+                <div class="setting-row">
+                    <span>备份时间</span>
+                    <input type="time" id="autoBackupTime" value="23:00" class="time-input">
+                </div>
+                <div class="setting-row">
+                    <span>保留份数</span>
+                    <select id="autoBackupKeep" class="time-input" style="width:auto;padding:6px 12px;">
+                        <option value="3" selected>3份（3天）</option>
+                        <option value="5">5份（5天）</option>
+                        <option value="7">7份（7天）</option>
+                        <option value="10">10份（10天）</option>
+                    </select>
+                </div>
+                <p class="setting-note">每天定时自动全量备份，超出的旧备份自动删除</p>
+                <div id="autoBackupList"></div>
+            </div>
+
+            <div class="settings-group">
                 <h3>💾 数据管理</h3>
                 <button class="btn-outline" onclick="exportBackup()">📤 导出备份(JSON)</button>
                 <button class="btn-outline" onclick="exportReadableText()">📄 导出可读文本</button>
@@ -243,7 +266,7 @@
             <div class="settings-group">
                 <h3>ℹ️ 关于</h3>
                 <div class="about-info">
-                    <p>工作备忘录 v2.1.0</p>
+                    <p>工作备忘录 v2.2.0</p>
                     <p>作者：梁兴宇</p>
                     <p>数据保存在手机本地，安全可靠</p>
                 </div>

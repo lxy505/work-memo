@@ -9,8 +9,12 @@ let settings = {
     wecomWebhook: '',
     pushplusToken: '',
     wxpusherToken: '',
-    wxpusherUid: ''
+    wxpusherUid: '',
+    autoBackupEnabled: true,
+    autoBackupTime: '23:00',
+    autoBackupKeep: 3
 };
+let autoBackupTimer = null;
 let currentPage = 'tasks';
 let currentFilter = 'all';
 let currentCat = null;
@@ -29,6 +33,7 @@ function init() {
     initSpeechRecognition();
     renderAll();
     setupReminder();
+    setupAutoBackup();
     setDefaults();
     bindEvents();
     cleanExpiredRecycle();
@@ -246,15 +251,17 @@ function parseVoiceDueDate(text) {
  */
 function removeDateKeywords(text) {
     let clean = text;
-    // 移除截止日期表述
-    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]?\s*之?前\s*(?:完成|搞定|交)?/, '');
-    clean = clean.replace(/\d{1,2}[日号]\s*之?前\s*(?:完成|搞定|交)?/, '');
-    clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交)?/, '');
-    clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交)?/, '');
+    // 移除截止日期表述（含完成/交等动词）
+    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]?\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
+    clean = clean.replace(/\d{1,2}[日号]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
+    clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
+    clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
     // 移除日期表述
     clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]/, '');
     clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]/, '');
     clean = clean.replace(/\d{1,2}月\d{1,2}[日号]/, '');
+    // 移除尾部"完成""了"等动词
+    clean = clean.replace(/\s*(?:完成|搞定|做完|做好|了)\s*$/, '');
     // 清理多余空格和尾部词
     clean = clean.replace(/\s+/g, ' ').trim();
     clean = clean.replace(/[的]+$/, '').trim();
@@ -430,7 +437,7 @@ function renderTasks() {
         <div class="task-card ${t.priority} ${t.completed ? 'done' : ''} ${isOverdue ? 'overdue' : ''}">
             <div class="task-check ${t.completed ? 'checked' : ''}" onclick="toggleTask(${t.id})">${t.completed ? '✓' : ''}</div>
             <div class="task-body">
-                <div class="task-title">${esc(t.title)}</div>
+                <div class="task-title" onclick="editTaskTitle(${t.id})" style="cursor:pointer">${esc(t.title)}</div>
                 ${t.desc ? `<div class="task-desc">${esc(t.desc)}</div>` : ''}
                 <div class="task-tags">
                     ${t.category ? `<span class="tag tag-cat">${esc(t.category)}</span>` : ''}
@@ -519,6 +526,18 @@ function toggleTask(id) {
     }
 }
 
+// 编辑事项标题
+function editTaskTitle(id) {
+    const t = appData.tasks.find(x => x.id === id);
+    if (!t) return;
+    const newTitle = prompt('修改事项标题：', t.title);
+    if (newTitle !== null && newTitle.trim() !== '' && newTitle.trim() !== t.title) {
+        t.title = newTitle.trim();
+        saveData(); renderTasks(); renderProgress();
+        showToast('✅ 标题已修改');
+    }
+}
+
 // 删除任务（进入回收站）
 function deleteTask(id) {
     const t = appData.tasks.find(x => x.id === id);
@@ -591,24 +610,10 @@ function updateProgressTaskSelect() {
 }
 
 function renderCalendar() {
-    const dots = document.getElementById('weekDots');
-    if (!dots) return;
-    const days = ['日', '一', '二', '三', '四', '五', '六'];
-    const today = new Date().toISOString().split('T')[0];
-    let html = '';
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(currentWeekStart); d.setDate(d.getDate() + i);
-        const ds = d.toISOString().split('T')[0];
-        const has = appData.progress.some(p => p.date === ds);
-        html += `<div class="week-dot ${ds === today ? 'today' : ''} ${has ? 'has-data' : ''}" onclick="addProgressForDate('${ds}')">
-            <div class="dot-name">${days[d.getDay()]}</div><div class="dot-date">${d.getDate()}</div></div>`;
-    }
-    dots.innerHTML = html;
-    const end = new Date(currentWeekStart); end.setDate(end.getDate() + 6);
-    document.getElementById('weekRange').textContent = `${currentWeekStart.getMonth() + 1}/${currentWeekStart.getDate()} - ${end.getMonth() + 1}/${end.getDate()}`;
+    // 进度页已移除周导航，此函数仅用于报告生成
+    // 保留空函数避免其他地方调用报错
 }
 
-function changeWeek(offset) { currentWeekStart.setDate(currentWeekStart.getDate() + offset * 7); renderCalendar(); renderProgress(); }
 function addProgressForDate(date) {
     updateProgressTaskSelect();
     document.getElementById('progressDate').value = date;
@@ -1249,7 +1254,15 @@ function updateSettingsUI() {
     document.getElementById('pushplusToken').value = settings.pushplusToken || '';
     document.getElementById('wxpusherToken').value = settings.wxpusherToken || '';
     document.getElementById('wxpusherUid').value = settings.wxpusherUid || '';
+    // 自动备份设置
+    const abToggle = document.getElementById('autoBackupToggle');
+    if (abToggle) abToggle.checked = settings.autoBackupEnabled;
+    const abTime = document.getElementById('autoBackupTime');
+    if (abTime) abTime.value = settings.autoBackupTime || '23:00';
+    const abKeep = document.getElementById('autoBackupKeep');
+    if (abKeep) abKeep.value = settings.autoBackupKeep || 3;
     updatePushDots();
+    renderAutoBackups();
 }
 
 function saveSettingsFromUI() {
@@ -1261,10 +1274,90 @@ function saveSettingsFromUI() {
     settings.pushplusToken = document.getElementById('pushplusToken').value.trim();
     settings.wxpusherToken = document.getElementById('wxpusherToken').value.trim();
     settings.wxpusherUid = document.getElementById('wxpusherUid').value.trim();
+    // 自动备份设置
+    const abToggle = document.getElementById('autoBackupToggle');
+    if (abToggle) settings.autoBackupEnabled = abToggle.checked;
+    const abTime = document.getElementById('autoBackupTime');
+    if (abTime) settings.autoBackupTime = abTime.value;
+    const abKeep = document.getElementById('autoBackupKeep');
+    if (abKeep) settings.autoBackupKeep = parseInt(abKeep.value) || 3;
     saveSettings();
     setupReminder();
+    setupAutoBackup();
     updatePushDots();
     renderCategoryBar();
+    renderAutoBackups();
+}
+
+// ========== 自动备份 ==========
+function setupAutoBackup() {
+    if (autoBackupTimer) clearInterval(autoBackupTimer);
+    if (!settings.autoBackupEnabled) return;
+    autoBackupTimer = setInterval(() => {
+        const now = new Date();
+        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const todayStr = now.toISOString().split('T')[0];
+        if (timeStr === settings.autoBackupTime && !window._autoBackupDone) {
+            window._autoBackupDone = todayStr;
+            doAutoBackup();
+        }
+        // 跨天重置
+        if (timeStr === '00:01') window._autoBackupDone = '';
+    }, 30000);
+}
+
+function doAutoBackup() {
+    // 存入localStorage
+    const backups = JSON.parse(localStorage.getItem('wm_autoBackups') || '[]');
+    const backup = {
+        date: new Date().toISOString().split('T')[0],
+        time: new Date().toLocaleTimeString('zh-CN'),
+        data: JSON.parse(JSON.stringify(appData)),
+        settings: JSON.parse(JSON.stringify(settings))
+    };
+    backups.push(backup);
+    // 按保留数量裁剪
+    const keep = settings.autoBackupKeep || 3;
+    while (backups.length > keep) backups.shift();
+    localStorage.setItem('wm_autoBackups', JSON.stringify(backups));
+    showToast('💾 自动备份完成');
+}
+
+function getAutoBackups() {
+    return JSON.parse(localStorage.getItem('wm_autoBackups') || '[]');
+}
+
+function restoreAutoBackup(index) {
+    const backups = getAutoBackups();
+    if (!backups[index]) { showToast('备份不存在'); return; }
+    if (!confirm(`确定恢复 ${backups[index].date} ${backups[index].time} 的备份？\n当前数据将被覆盖！`)) return;
+    const b = backups[index];
+    appData = { tasks: [], progress: [], recycleBin: [], ...b.data };
+    if (b.settings) {
+        settings = { ...settings, ...b.settings };
+        saveSettings();
+    }
+    saveData(); renderAll();
+    showToast('✅ 已恢复备份');
+}
+
+function renderAutoBackups() {
+    const container = document.getElementById('autoBackupList');
+    if (!container) return;
+    const backups = getAutoBackups();
+    if (!backups.length) {
+        container.innerHTML = '<p style="font-size:13px;color:var(--text2);">暂无自动备份</p>';
+        return;
+    }
+    container.innerHTML = backups.map((b, i) => `
+        <div class="recycle-item">
+            <div class="recycle-info">
+                <div class="recycle-title">${b.date} ${b.time}</div>
+                <div class="recycle-time">事项${(b.data.tasks||[]).length}条 进度${(b.data.progress||[]).length}条</div>
+            </div>
+            <button class="recycle-restore" onclick="restoreAutoBackup(${i})">恢复</button>
+        </div>`
+    ).join('');
 }
 
 function clearData() {
@@ -1330,9 +1423,11 @@ if ('Notification' in window && Notification.permission === 'default') {
 init();
 
 // 监听设置变更
-['notifyToggle', 'autoPushToggle'].forEach(id => {
-    document.getElementById(id).addEventListener('change', saveSettingsFromUI);
+['notifyToggle', 'autoPushToggle', 'autoBackupToggle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveSettingsFromUI);
 });
-['notifyTime', 'serverChanKey', 'wecomWebhook', 'pushplusToken', 'wxpusherToken', 'wxpusherUid'].forEach(id => {
-    document.getElementById(id).addEventListener('change', saveSettingsFromUI);
+['notifyTime', 'serverChanKey', 'wecomWebhook', 'pushplusToken', 'wxpusherToken', 'wxpusherUid', 'autoBackupTime', 'autoBackupKeep'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('change', saveSettingsFromUI);
 });
