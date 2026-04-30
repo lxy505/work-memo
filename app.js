@@ -18,7 +18,7 @@ let autoBackupTimer = null;
 let currentPage = 'tasks';
 let currentFilter = 'all';
 let currentCat = null;
-let currentWeekStart = getWeekStart(new Date());
+let currentProgressWeekStart = getWeekStart(new Date());
 let recognition = null;
 let isRecording = false;
 let reportType = 'weekly';
@@ -377,9 +377,11 @@ function handleVoiceProgress(parsed, date) {
 // 语音添加事项
 function addTaskFromVoice(text, date, dueDate) {
     const taskDate = date || new Date().toISOString().split('T')[0];
+    // 根据关键词自动匹配分类
+    const cat = guessCategory(text);
     const newTask = {
         id: Date.now(), title: text, desc: '',
-        category: settings.categories[0] || '其他',
+        category: cat,
         priority: 'medium', progress: 0,
         completed: false,
         date: taskDate,
@@ -389,6 +391,23 @@ function addTaskFromVoice(text, date, dueDate) {
     appData.tasks.push(newTask);
     saveData(); renderTasks(); renderProgress();
     showToast('✅ 已添加工作事项');
+}
+
+// 根据关键词智能匹配分类
+function guessCategory(text) {
+    const categoryKeywords = {
+        '项目开发': ['开发', '编码', '编程', '代码', '程序', '软件', '系统', '功能', '模块', '接口', '需求', '联调', '部署', '上线', '版本', '迭代', '重构', 'bug', '修复', '测试'],
+        '会议沟通': ['会议', '开会', '讨论', '沟通', '汇报', '评审', '对接', '协调', '洽谈', '面谈', '电话', '邮件'],
+        '文档撰写': ['文档', '报告', '方案', '计划', '总结', '周报', '月报', '撰写', '编写', '起草', '文档', 'PPT', '说明'],
+        '问题处理': ['问题', '故障', '异常', '处理', '排查', '修复', '紧急', '应急', '投诉', '反馈', '工单'],
+    };
+    for (const [cat, keywords] of Object.entries(categoryKeywords)) {
+        if (keywords.some(kw => text.includes(kw))) {
+            // 检查用户的分类列表里是否有这个分类
+            if (settings.categories.includes(cat)) return cat;
+        }
+    }
+    return settings.categories[0] || '其他';
 }
 
 function stopRecordingUI() {
@@ -437,7 +456,7 @@ function renderTasks() {
         <div class="task-card ${t.priority} ${t.completed ? 'done' : ''} ${isOverdue ? 'overdue' : ''}">
             <div class="task-check ${t.completed ? 'checked' : ''}" onclick="toggleTask(${t.id})">${t.completed ? '✓' : ''}</div>
             <div class="task-body">
-                <div class="task-title" onclick="editTaskTitle(${t.id})" style="cursor:pointer">${esc(t.title)}</div>
+                <div class="task-title" onclick="editTask(${t.id})" style="cursor:pointer">${esc(t.title)}</div>
                 ${t.desc ? `<div class="task-desc">${esc(t.desc)}</div>` : ''}
                 <div class="task-tags">
                     ${t.category ? `<span class="tag tag-cat">${esc(t.category)}</span>` : ''}
@@ -526,16 +545,34 @@ function toggleTask(id) {
     }
 }
 
-// 编辑事项标题
-function editTaskTitle(id) {
+// 编辑事项（弹窗）
+function editTask(id) {
     const t = appData.tasks.find(x => x.id === id);
     if (!t) return;
-    const newTitle = prompt('修改事项标题：', t.title);
-    if (newTitle !== null && newTitle.trim() !== '' && newTitle.trim() !== t.title) {
-        t.title = newTitle.trim();
-        saveData(); renderTasks(); renderProgress();
-        showToast('✅ 标题已修改');
-    }
+    document.getElementById('editTaskId').value = t.id;
+    document.getElementById('editTaskTitle').value = t.title;
+    document.getElementById('editTaskDesc').value = t.desc || '';
+    document.getElementById('editTaskCategory').innerHTML = settings.categories.map(c => `<option value="${esc(c)}" ${c === t.category ? 'selected' : ''}>${esc(c)}</option>`).join('');
+    document.getElementById('editTaskPriority').value = t.priority;
+    document.getElementById('editTaskDueDate').value = t.dueDate || '';
+    showModal('editTaskModal');
+}
+
+function submitEditTask() {
+    const id = parseInt(document.getElementById('editTaskId').value);
+    const t = appData.tasks.find(x => x.id === id);
+    if (!t) return;
+    const newTitle = document.getElementById('editTaskTitle').value.trim();
+    if (!newTitle) { showToast('标题不能为空'); return; }
+    t.title = newTitle;
+    t.desc = document.getElementById('editTaskDesc').value.trim();
+    t.category = document.getElementById('editTaskCategory').value;
+    t.priority = document.getElementById('editTaskPriority').value;
+    t.dueDate = document.getElementById('editTaskDueDate').value;
+    saveData();
+    closeModal('editTaskModal');
+    renderTasks(); renderProgress();
+    showToast('✅ 已修改');
 }
 
 // 删除任务（进入回收站）
@@ -625,57 +662,88 @@ function renderProgress() {
     if (!list) return;
 
     const today = new Date().toISOString().split('T')[0];
-    const todayObj = new Date();
-    const weekday = getWeekday(today);
+    const days = ['一', '二', '三', '四', '五', '六', '日'];
 
-    // 获取所有未完成事项 (progress < 100)
-    const incompleteTasks = appData.tasks.filter(t => !t.completed && (t.progress || 0) < 100);
+    // 渲染周历
+    let calHtml = '<div class="week-nav">';
+    calHtml += '<button onclick="changeProgressWeek(-1)">‹</button>';
+    calHtml += '<span id="progressWeekRange"></span>';
+    calHtml += '<button onclick="changeProgressWeek(1)">›</button>';
+    calHtml += '</div>';
+    calHtml += '<div class="week-dots" id="progressWeekDots">';
 
-    if (!incompleteTasks.length) {
-        list.innerHTML = `<div class="progress-date-header">${today} ${weekday}</div><div class="empty-state"><div class="empty-icon">📊</div><h4>暂无未完成事项</h4><p>所有事项都已完成</p></div>`;
-        return;
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(currentProgressWeekStart);
+        d.setDate(d.getDate() + i);
+        const ds = d.toISOString().split('T')[0];
+        // 检查该日有没有事项（按dueDate或createdAt判断）
+        const hasTasks = appData.tasks.some(t => {
+            const taskDate = t.dueDate || (t.createdAt ? t.createdAt.split('T')[0] : '');
+            return taskDate === ds;
+        });
+        const isToday = ds === today;
+        calHtml += `<div class="week-dot ${isToday ? 'today' : ''} ${hasTasks ? 'has-data' : ''}" onclick="selectProgressDate('${ds}')">\n            <div class="dot-name">${days[i]}</div><div class="dot-date">${d.getDate()}</div>\n        </div>`;
+    }
+    calHtml += '</div>';
+
+    // 周范围文字
+    const end = new Date(currentProgressWeekStart);
+    end.setDate(end.getDate() + 6);
+    const rangeText = `${currentProgressWeekStart.getMonth() + 1}/${currentProgressWeekStart.getDate()} - ${end.getMonth() + 1}/${end.getDate()}`;
+
+    // 获取选中日期的事项（默认今天）
+    const selectedDate = window._selectedProgressDate || today;
+    const weekday = getWeekday(selectedDate);
+
+    // 筛选该日期的事项
+    const dateTasks = appData.tasks.filter(t => {
+        const taskDate = t.dueDate || (t.createdAt ? t.createdAt.split('T')[0] : '');
+        return taskDate === selectedDate && !t.completed && (t.progress || 0) < 100;
+    });
+
+    let contentHtml = `<div class="progress-date-header">${selectedDate} ${weekday}</div>`;
+
+    if (!dateTasks.length) {
+        contentHtml += '<div class="empty-state"><div class="empty-icon">📊</div><h4>该日期暂无未完成事项</h4></div>';
+    } else {
+        const pO = { high: 0, medium: 1, low: 2 };
+        dateTasks.sort((a, b) => {
+            const aOverdue = a.dueDate && a.dueDate < today;
+            const bOverdue = b.dueDate && b.dueDate < today;
+            if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+            return pO[a.priority] - pO[b.priority];
+        });
+
+        dateTasks.forEach(t => {
+            const pct = t.progress || 0;
+            const isOverdue = t.dueDate && t.dueDate < today;
+            const fillClass = pct >= 100 ? 'complete' : '';
+            const latestProgress = [...appData.progress]
+                .filter(p => p.taskId === t.id)
+                .sort((a, b) => b.id - a.id)[0];
+            const latestNote = latestProgress ? latestProgress.note : '';
+
+            contentHtml += `
+            <div class="progress-task-card ${isOverdue ? 'overdue' : ''}" onclick="openProgressUpdate(${t.id})">\n                <div class="progress-task-header">\n                    <span class="progress-task-title">${esc(t.title)}</span>\n                    ${isOverdue ? '<span class="tag tag-overdue">逾期</span>' : ''}\n                </div>\n                <div class="progress-bar-bg">\n                    <div class="progress-bar-fill ${fillClass}" style="width:${pct}%"></div>\n                </div>\n                <div class="progress-task-meta">\n                    <span class="progress-pct ${fillClass}">${pct}%</span>\n                    ${latestNote ? `<span class="progress-task-note">${esc(latestNote)}</span>` : ''}\n                    ${t.dueDate ? `<span class="progress-task-due">截止 ${t.dueDate}</span>` : ''}\n                </div>\n            </div>`;
+        });
     }
 
-    // 排序：逾期优先，再按优先级
-    const pO = { high: 0, medium: 1, low: 2 };
-    incompleteTasks.sort((a, b) => {
-        const aOverdue = a.dueDate && a.dueDate < today;
-        const bOverdue = b.dueDate && b.dueDate < today;
-        if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
-        return pO[a.priority] - pO[b.priority];
-    });
+    list.innerHTML = calHtml + contentHtml;
 
-    let html = `<div class="progress-date-header">${today} ${weekday}</div>`;
+    // 更新周范围文字
+    const rangeEl = document.getElementById('progressWeekRange');
+    if (rangeEl) rangeEl.textContent = rangeText;
+}
 
-    incompleteTasks.forEach(t => {
-        const pct = t.progress || 0;
-        const isOverdue = t.dueDate && t.dueDate < today;
-        const fillClass = pct >= 100 ? 'complete' : '';
+function changeProgressWeek(offset) {
+    currentProgressWeekStart.setDate(currentProgressWeekStart.getDate() + offset * 7);
+    window._selectedProgressDate = null;
+    renderProgress();
+}
 
-        // 获取最新一条进度记录
-        const latestProgress = [...appData.progress]
-            .filter(p => p.taskId === t.id)
-            .sort((a, b) => b.id - a.id)[0];
-        const latestNote = latestProgress ? latestProgress.note : '';
-
-        html += `
-        <div class="progress-task-card ${isOverdue ? 'overdue' : ''}" onclick="openProgressUpdate(${t.id})">
-            <div class="progress-task-header">
-                <span class="progress-task-title">${esc(t.title)}</span>
-                ${isOverdue ? '<span class="tag tag-overdue">逾期</span>' : ''}
-            </div>
-            <div class="progress-bar-bg">
-                <div class="progress-bar-fill ${fillClass}" style="width:${pct}%"></div>
-            </div>
-            <div class="progress-task-meta">
-                <span class="progress-pct ${fillClass}">${pct}%</span>
-                ${latestNote ? `<span class="progress-task-note">${esc(latestNote)}</span>` : ''}
-                ${t.dueDate ? `<span class="progress-task-due">截止 ${t.dueDate}</span>` : ''}
-            </div>
-        </div>`;
-    });
-
-    list.innerHTML = html;
+function selectProgressDate(date) {
+    window._selectedProgressDate = date;
+    renderProgress();
 }
 
 function submitProgress() {

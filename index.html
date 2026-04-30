@@ -266,7 +266,7 @@
             <div class="settings-group">
                 <h3>ℹ️ 关于</h3>
                 <div class="about-info">
-                    <p>工作备忘录 v2.2.0</p>
+                    <p>工作备忘录 v2.3.0</p>
                     <p>作者：梁兴宇</p>
                     <p>数据保存在手机本地，安全可靠</p>
                 </div>
@@ -329,6 +329,45 @@
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal('taskModal')">取消</button>
                 <button class="btn-confirm" onclick="submitTask()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：编辑任务 -->
+    <div class="modal-overlay" id="editTaskModal">
+        <div class="modal-sheet">
+            <div class="modal-handle"></div>
+            <h3>编辑工作事项</h3>
+            <input type="hidden" id="editTaskId">
+            <div class="form-field">
+                <label>标题</label>
+                <input type="text" id="editTaskTitle" placeholder="事项标题" autocomplete="off">
+            </div>
+            <div class="form-field">
+                <label>描述</label>
+                <textarea id="editTaskDesc" placeholder="详细描述（可选）" rows="2"></textarea>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label>分类</label>
+                    <select id="editTaskCategory"></select>
+                </div>
+                <div class="form-field">
+                    <label>优先级</label>
+                    <select id="editTaskPriority">
+                        <option value="high">高</option>
+                        <option value="medium">中</option>
+                        <option value="low">低</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-field">
+                <label>截止日期（可选）</label>
+                <input type="date" id="editTaskDueDate">
+            </div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal('editTaskModal')">取消</button>
+                <button class="btn-confirm" onclick="submitEditTask()">保存</button>
             </div>
         </div>
     </div>
