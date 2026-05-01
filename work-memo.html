@@ -193,6 +193,39 @@ html, body {
 .dot-date { font-size: 16px; font-weight: 700; }
 .progress-task-cat { background: #eef2ff; color: var(--primary); padding: 1px 6px; border-radius: 6px; font-size: 11px; }
 
+/* 月历 */
+.month-nav { display: flex; align-items: center; justify-content: space-between; padding: 0 8px; margin-bottom: 12px; }
+.month-nav button { width: 36px; height: 36px; border: none; background: var(--card); border-radius: 10px; font-size: 20px; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.month-nav span { font-weight: 600; font-size: 16px; }
+.month-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 20px; }
+.month-weekday { text-align: center; font-size: 11px; color: var(--text2); padding: 6px 0; font-weight: 600; }
+.month-day { text-align: center; padding: 8px 2px; border-radius: 10px; background: var(--card); font-size: 14px; cursor: pointer; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.month-day.empty { background: transparent; box-shadow: none; cursor: default; }
+.month-day.today { background: var(--primary); color: white; font-weight: 700; }
+.month-day.has-data::after { content:''; display:block; width:5px; height:5px; background:var(--success); border-radius:50%; margin:3px auto 0; }
+.month-day.today.has-data::after { background: white; }
+.month-day.selected { outline: 2px solid var(--primary); outline-offset: -2px; font-weight: 700; }
+
+/* 报告新格式 */
+.report-summary { background: var(--card); border-radius: 14px; padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+.report-summary-title { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: var(--text); }
+.report-stats { display: flex; gap: 6px; }
+.stat-item { flex: 1; text-align: center; padding: 10px 4px; background: #f8f9fa; border-radius: 10px; }
+.stat-item .stat-num { display: block; font-size: 22px; font-weight: 800; color: var(--text); }
+.stat-item .stat-label { display: block; font-size: 11px; color: var(--text2); margin-top: 2px; }
+.stat-item.stat-success .stat-num { color: var(--success); }
+.stat-item.stat-primary .stat-num { color: var(--primary); }
+.stat-item.stat-warning .stat-num { color: var(--warning); }
+.stat-item.stat-danger .stat-num { color: var(--danger); }
+.report-section { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+.report-section-title { font-size: 14px; font-weight: 700; color: var(--primary); margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1.5px solid #eef2ff; }
+.report-item { padding: 8px 0; font-size: 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #f0f0f0; }
+.report-item:last-child { border-bottom: none; }
+.report-item .report-item-meta { font-size: 12px; color: var(--text2); white-space: nowrap; margin-left: 8px; }
+.report-item.empty-item { color: var(--text2); font-size: 13px; justify-content: center; }
+.report-item.overdue-item { color: var(--danger); }
+.report-overdue-tag { background: #fde8e8; color: #c53030; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 6px; }
+
 /* 进度页重構 */
 .progress-date-header {
     font-size: 16px; font-weight: 700; color: var(--primary); margin-bottom: 16px;
@@ -864,7 +897,7 @@ let autoBackupTimer = null;
 let currentPage = 'tasks';
 let currentFilter = 'all';
 let currentCat = null;
-let currentProgressWeekStart = getWeekStart(new Date());
+let currentProgressMonth = new Date().toISOString().slice(0, 7); // "2026-05"
 let recognition = null;
 let isRecording = false;
 let reportType = 'weekly';
@@ -1516,43 +1549,48 @@ function renderProgress() {
     if (!list) return;
 
     const today = new Date().toISOString().split('T')[0];
-    const days = ['一', '二', '三', '四', '五', '六', '日'];
+    const [curY, curM] = currentProgressMonth.split('-').map(Number);
+    const daysInMonth = new Date(curY, curM, 0).getDate();
+    const firstDayOfWeek = new Date(curY, curM - 1, 1).getDay(); // 0=日 1=一
+    const weekHeaders = ['日', '一', '二', '三', '四', '五', '六'];
 
-    // 渲染周历
-    let calHtml = '<div class="week-nav">';
-    calHtml += '<button onclick="changeProgressWeek(-1)">‹</button>';
-    calHtml += '<span id="progressWeekRange"></span>';
-    calHtml += '<button onclick="changeProgressWeek(1)">›</button>';
+    // 月历头部
+    let calHtml = '<div class="month-nav">';
+    calHtml += '<button onclick="changeProgressMonth(-1)">‹</button>';
+    calHtml += '<span>' + curY + '年' + curM + '月</span>';
+    calHtml += '<button onclick="changeProgressMonth(1)">›</button>';
     calHtml += '</div>';
-    calHtml += '<div class="week-dots">';
 
-    for (let i = 0; i < 7; i++) {
-        const d = new Date(currentProgressWeekStart);
-        d.setDate(d.getDate() + i);
-        const ds = d.toISOString().split('T')[0];
+    // 星期头
+    calHtml += '<div class="month-grid">';
+    weekHeaders.forEach(w => {
+        calHtml += '<div class="month-weekday">' + w + '</div>';
+    });
+
+    // 空白填充（1号前的空位）
+    for (let i = 0; i < firstDayOfWeek; i++) {
+        calHtml += '<div class="month-day empty"></div>';
+    }
+
+    // 日期格子
+    for (let d = 1; d <= daysInMonth; d++) {
+        const ds = curY + '-' + String(curM).padStart(2, '0') + '-' + String(d).padStart(2, '0');
         const hasTasks = appData.tasks.some(t => {
             const taskDate = t.dueDate || (t.createdAt ? t.createdAt.split('T')[0] : '');
             return taskDate === ds;
         });
         const isToday = ds === today;
         const isSelected = ds === (window._selectedProgressDate || today);
-        calHtml += '<div class="week-dot ' + (isToday ? 'today ' : '') + (hasTasks ? 'has-data ' : '') + (isSelected ? 'selected' : '') + '" onclick="selectProgressDate(\'' + ds + '\')">';
-        calHtml += '<div class="dot-name">' + days[i] + '</div>';
-        calHtml += '<div class="dot-date">' + d.getDate() + '</div>';
+        calHtml += '<div class="month-day ' + (isToday ? 'today ' : '') + (hasTasks ? 'has-data ' : '') + (isSelected ? 'selected' : '') + '" onclick="selectProgressDate(\'' + ds + '\')">';
+        calHtml += d;
         calHtml += '</div>';
     }
     calHtml += '</div>';
 
-    // 周范围文字
-    const end = new Date(currentProgressWeekStart);
-    end.setDate(end.getDate() + 6);
-    const rangeText = (currentProgressWeekStart.getMonth() + 1) + '/' + currentProgressWeekStart.getDate() + ' - ' + (end.getMonth() + 1) + '/' + end.getDate();
-
-    // 获取选中日期（默认今天）
+    // 选中日期的事项列表
     const selectedDate = window._selectedProgressDate || today;
     const weekday = getWeekday(selectedDate);
 
-    // 截至当日，所有未达100%的事项
     const incompleteTasks = appData.tasks.filter(t => {
         return !t.completed && (t.progress || 0) < 100;
     });
@@ -1596,13 +1634,12 @@ function renderProgress() {
     }
 
     list.innerHTML = calHtml + contentHtml;
-
-    const rangeEl = document.getElementById('progressWeekRange');
-    if (rangeEl) rangeEl.textContent = rangeText;
 }
 
-function changeProgressWeek(offset) {
-    currentProgressWeekStart.setDate(currentProgressWeekStart.getDate() + offset * 7);
+function changeProgressMonth(offset) {
+    const [y, m] = currentProgressMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + offset, 1);
+    currentProgressMonth = d.toISOString().slice(0, 7);
     window._selectedProgressDate = null;
     renderProgress();
 }
@@ -1714,61 +1751,135 @@ function generateWeekly() {
     const ws = document.getElementById('reportWeek').value;
     if (!ws) { showToast('请选择周次'); return; }
     const { start, end } = parseWeekInput(ws);
-    const items = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const ds = d.toISOString().split('T')[0];
-        appData.progress.filter(p => p.date === ds).forEach(p => {
-            const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
-            const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
-            const taskName = task ? task.title : (recycled ? recycled.task.title : null);
-            items.push({ date: ds, weekday: getWeekday(ds), content: p.note || `进度${p.progress}%`, taskName, category: task ? task.category : '', progress: p.progress });
-        });
-    }
-    renderReportItems(items);
-    window._reportData = items; window._reportLabel = ws;
+    const startStr = start.toISOString().split('T')[0];
+    const endStr = end.toISOString().split('T')[0];
+    renderSmartReport(startStr, endStr, '本周');
+    window._reportLabel = ws;
 }
 
 function generateMonthly() {
     const ms = document.getElementById('reportMonth').value;
     if (!ms) { showToast('请选择月份'); return; }
     const [y, m] = ms.split('-');
-    const start = new Date(y, m - 1, 1), end = new Date(y, m, 0);
-    const items = [];
-    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-        const ds = d.toISOString().split('T')[0];
-        appData.progress.filter(p => p.date === ds).forEach(p => {
-            const task = p.taskId ? appData.tasks.find(t => t.id === p.taskId) : null;
-            const recycled = !task && p.taskId ? appData.recycleBin.find(r => r.id === p.taskId) : null;
-            const taskName = task ? task.title : (recycled ? recycled.task.title : null);
-            items.push({ date: ds, weekday: getWeekday(ds), content: p.note || `进度${p.progress}%`, taskName, category: task ? task.category : '其他', progress: p.progress });
-        });
-    }
-    renderReportItems(items, true);
-    window._reportData = items; window._reportLabel = ms;
+    const start = new Date(y, m - 1, 1);
+    const end = new Date(y, m, 0);
+    const startStr = start.toISOString().split('T')[0];
+    const endStr = end.toISOString().split('T')[0];
+    renderSmartReport(startStr, endStr, '本月');
+    window._reportLabel = ms;
 }
 
-function renderReportItems(items, isMonthly = false) {
+function renderSmartReport(startStr, endStr, periodLabel) {
     const preview = document.getElementById('reportPreview');
-    if (!items.length) { preview.innerHTML = '<div class="empty-state"><div class="empty-icon">📄</div><h4>该时间段暂无记录</h4></div>'; return; }
-    const grouped = {};
-    items.forEach(i => { if (!grouped[i.date]) grouped[i.date] = []; grouped[i.date].push(i); });
-    let html = '';
-    if (isMonthly) {
-        const cs = {};
-        items.forEach(i => { cs[i.category || '其他'] = (cs[i.category || '其他'] || 0) + 1; });
-        html += '<div style="margin-bottom:20px;padding:12px;background:#f8f9fa;border-radius:10px;">';
-        html += '<div style="font-weight:700;margin-bottom:8px;color:#667eea;">分类统计</div>';
-        Object.entries(cs).forEach(([c, n]) => { html += `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e2e8f0;font-size:13px;"><span>${esc(c)}</span><span style="font-weight:600;">${n} 条</span></div>`; });
-        html += '</div>';
-    }
-    Object.entries(grouped).forEach(([date, dayItems]) => {
-        html += `<div class="report-day"><div class="report-day-title">${date} ${dayItems[0].weekday}</div>`;
-        dayItems.forEach((item, i) => {
-            html += `<div class="report-item">${i + 1}. ${esc(item.content)}${item.taskName ? `<span style="color:#667eea;font-size:12px;"> 【${esc(item.taskName)}】</span>` : ''}<span style="color:#48bb78;font-size:12px;font-weight:600;"> ${item.progress}%</span></div>`;
-        });
-        html += '</div>';
+    const today = new Date().toISOString().split('T')[0];
+
+    // 筛选时间段内的所有事项（按createdAt或date或dueDate判断）
+    const tasksInPeriod = appData.tasks.filter(t => {
+        const created = t.createdAt ? t.createdAt.split('T')[0] : '';
+        const taskDate = t.date || created;
+        // 事项创建时间在范围内，或截止日期在范围内
+        return (created >= startStr && created <= endStr) ||
+               (t.dueDate && t.dueDate >= startStr && t.dueDate <= endStr);
     });
+
+    // 新增事项：创建时间在范围内
+    const newTasks = tasksInPeriod.filter(t => {
+        const created = t.createdAt ? t.createdAt.split('T')[0] : '';
+        return created >= startStr && created <= endStr;
+    });
+
+    // 已完成事项
+    const completedTasks = tasksInPeriod.filter(t => t.completed);
+
+    // 未完成事项（进度<100%）
+    const incompleteTasks = tasksInPeriod.filter(t => !t.completed && (t.progress || 0) < 100);
+
+    // 逾期事项
+    const overdueTasks = tasksInPeriod.filter(t => !t.completed && t.dueDate && t.dueDate < today);
+
+    // 下月已确定事项：dueDate在下个月且未完成
+    const todayObj = new Date();
+    const nextMonthStart = new Date(todayObj.getFullYear(), todayObj.getMonth() + 1, 1).toISOString().split('T')[0];
+    const nextMonthEnd = new Date(todayObj.getFullYear(), todayObj.getMonth() + 2, 0).toISOString().split('T')[0];
+    const nextMonthTasks = appData.tasks.filter(t =>
+        !t.completed && t.dueDate && t.dueDate >= nextMonthStart && t.dueDate <= nextMonthEnd
+    );
+
+    // 渲染报告
+    let html = '';
+
+    // 概览统计
+    html += '<div class="report-summary">';
+    html += '<div class="report-summary-title">' + periodLabel + '工作概览</div>';
+    html += '<div class="report-stats">';
+    html += '<div class="stat-item"><span class="stat-num">' + tasksInPeriod.length + '</span><span class="stat-label">事项总数</span></div>';
+    html += '<div class="stat-item stat-success"><span class="stat-num">' + completedTasks.length + '</span><span class="stat-label">已完成</span></div>';
+    html += '<div class="stat-item stat-primary"><span class="stat-num">' + newTasks.length + '</span><span class="stat-label">新增</span></div>';
+    html += '<div class="stat-item stat-warning"><span class="stat-num">' + incompleteTasks.length + '</span><span class="stat-label">未完成</span></div>';
+    html += '<div class="stat-item stat-danger"><span class="stat-num">' + overdueTasks.length + '</span><span class="stat-label">逾期</span></div>';
+    html += '</div>';
+    html += '</div>';
+
+    // 1. 新增事项
+    html += '<div class="report-section">';
+    html += '<div class="report-section-title">1、' + periodLabel + '新增（' + newTasks.length + '个）</div>';
+    if (newTasks.length) {
+        newTasks.forEach(t => {
+            html += '<div class="report-item">' + esc(t.title) + '<span class="report-item-meta">' + (t.category || '') + ' · ' + (t.progress || 0) + '%</span></div>';
+        });
+    } else {
+        html += '<div class="report-item empty-item">暂无新增事项</div>';
+    }
+    html += '</div>';
+
+    // 2. 未完成事项
+    html += '<div class="report-section">';
+    html += '<div class="report-section-title">2、' + periodLabel + '未完结事项（' + incompleteTasks.length + '个）</div>';
+    if (incompleteTasks.length) {
+        incompleteTasks.forEach(t => {
+            const overdueTag = (t.dueDate && t.dueDate < today) ? ' <span class="report-overdue-tag">逾期</span>' : '';
+            html += '<div class="report-item">' + esc(t.title) + overdueTag + '<span class="report-item-meta">' + (t.progress || 0) + '%' + (t.dueDate ? ' · 截止' + t.dueDate : '') + '</span></div>';
+        });
+    } else {
+        html += '<div class="report-item empty-item">全部完成 🎉</div>';
+    }
+    html += '</div>';
+
+    // 3. 逾期事项
+    html += '<div class="report-section">';
+    html += '<div class="report-section-title">3、' + periodLabel + '逾期事项（' + overdueTasks.length + '个）</div>';
+    if (overdueTasks.length) {
+        overdueTasks.forEach(t => {
+            html += '<div class="report-item overdue-item">' + esc(t.title) + '<span class="report-item-meta">截止' + t.dueDate + ' · ' + (t.progress || 0) + '%</span></div>';
+        });
+    } else {
+        html += '<div class="report-item empty-item">无逾期事项 👍</div>';
+    }
+    html += '</div>';
+
+    // 4. 下月已确定工作事项
+    html += '<div class="report-section">';
+    html += '<div class="report-section-title">4、下月已确定工作事项（' + nextMonthTasks.length + '个）</div>';
+    if (nextMonthTasks.length) {
+        nextMonthTasks.forEach(t => {
+            html += '<div class="report-item">' + esc(t.title) + '<span class="report-item-meta">截止' + t.dueDate + ' · ' + (t.progress || 0) + '%</span></div>';
+        });
+    } else {
+        html += '<div class="report-item empty-item">暂无下月确定事项</div>';
+    }
+    html += '</div>';
+
     preview.innerHTML = html;
+
+    // 保存报告数据用于导出
+    window._reportData = tasksInPeriod.map(t => ({
+        date: t.createdAt ? t.createdAt.split('T')[0] : '',
+        weekday: t.createdAt ? getWeekday(t.createdAt.split('T')[0]) : '',
+        content: t.title,
+        taskName: t.title,
+        category: t.category || '其他',
+        progress: t.progress || 0
+    }));
 }
 
 function exportExcel() {
