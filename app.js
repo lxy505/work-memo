@@ -658,7 +658,6 @@ function addProgressForDate(date) {
 }
 
 function renderProgress() {
-function renderProgress() {
     const list = document.getElementById('progressList');
     if (!list) return;
 
