@@ -1097,19 +1097,21 @@ function parseVoiceDueDate(text) {
  */
 function removeDateKeywords(text) {
     let clean = text;
-    // 移除截止日期表述（含完成/交等动词）
-    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]?\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
-    clean = clean.replace(/\d{1,2}[日号]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
-    clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
-    clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/, '');
-    // 移除日期表述
-    clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]/, '');
-    clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]/, '');
-    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]/, '');
-    // 移除尾部"完成""了"等动词
-    clean = clean.replace(/\s*(?:完成|搞定|做完|做好|了)\s*$/, '');
-    // 清理多余空格和尾部词
+    // 1. 先移除截止日期表述（X月X日前完成 / X号前完成 / 下周X前完成 / 周X前完成）
+    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]?\s*之?前\s*(?:完成|搞定|交|交付)?/g, '');
+    clean = clean.replace(/\d{1,2}[日号]\s*之?前\s*(?:完成|搞定|交|交付)?/g, '');
+    clean = clean.replace(/下周\s*(?:周|星期)?[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/g, '');
+    clean = clean.replace(/(?:本周|这周)?\s*(?:周|星期)[一二三四五六日天]\s*之?前\s*(?:完成|搞定|交|交付)?/g, '');
+    // 2. 移除日期前缀（下周四、本周三、周四、5月20日等）
+    clean = clean.replace(/下个?周\s*(?:周|星期)?[一二三四五六日天]/g, '');
+    clean = clean.replace(/(?:本|这)个?周\s*(?:周|星期)?[一二三四五六日天]/g, '');
+    clean = clean.replace(/(?:周|星期)[一二三四五六日天]/g, '');
+    clean = clean.replace(/\d{1,2}月\d{1,2}[日号]/g, '');
+    // 3. 移除尾部"完成""了"等动词（但不在中间的）
+    clean = clean.replace(/\s*(?:完成|搞定|做完|做好|了)\s*$/g, '');
+    // 4. 清理多余空格和尾部词
     clean = clean.replace(/\s+/g, ' ').trim();
+    clean = clean.replace(/^[的\s]+/, '').trim();
     clean = clean.replace(/[的]+$/, '').trim();
     return clean;
 }
@@ -1159,6 +1161,7 @@ function initSpeechRecognition() {
 // 解析语音中的进度信息
 function parseVoiceProgress(text) {
     // 匹配模式：关键词+完成/进度+百分比
+    // 注意："完成"必须在数字%前面，避免把"完成方案"误判为进度
     const patterns = [
         /^(.+?)(?:完成(?:了)?|进度(?:为|是)?)\s*(\d+)\s*%\s*$/,
         /^(.+?)\s+(\d+)\s*%\s*$/,
@@ -1167,7 +1170,11 @@ function parseVoiceProgress(text) {
     for (const pattern of patterns) {
         const match = text.match(pattern);
         if (match) {
-            return { keyword: match[1].trim(), progress: parseInt(match[2]) };
+            const keyword = match[1].trim();
+            // 关键词不能为空，且数字必须>0或是0%的情况
+            if (keyword.length > 0) {
+                return { keyword, progress: parseInt(match[2]) };
+            }
         }
     }
     return null;
@@ -1242,17 +1249,18 @@ function addTaskFromVoice(text, date, dueDate) {
 // 根据关键词智能匹配分类
 function guessCategory(text) {
     const categoryKeywords = {
-        '项目开发': ['开发', '编码', '编程', '代码', '程序', '软件', '系统', '功能', '模块', '接口', '需求', '联调', '部署', '上线', '版本', '迭代', '重构', 'bug', '修复', '测试'],
-        '会议沟通': ['会议', '开会', '讨论', '沟通', '汇报', '评审', '对接', '协调', '洽谈', '面谈', '电话', '邮件'],
-        '文档撰写': ['文档', '报告', '方案', '计划', '总结', '周报', '月报', '撰写', '编写', '起草', '文档', 'PPT', '说明'],
-        '问题处理': ['问题', '故障', '异常', '处理', '排查', '修复', '紧急', '应急', '投诉', '反馈', '工单'],
+        '项目开发': ['开发', '编码', '编程', '代码', '程序', '软件', '系统', '功能', '模块', '接口', '需求', '联调', '部署', '上线', '版本', '迭代', '重构', 'bug', '修复', '测试', '实现', '研发', '技术', '架构', '搭建', '配置', '调试'],
+        '会议沟通': ['会议', '开会', '讨论', '沟通', '汇报', '评审', '对接', '协调', '洽谈', '面谈', '电话', '邮件', '方案汇报', '方案沟通', '项目汇报', '工作汇报', '情况汇报', '进度汇报', '述职', '宣讲', '培训', '交流', '确认', '同步', '通知'],
+        '文档撰写': ['文档', '报告', '方案', '计划', '总结', '周报', '月报', '撰写', '编写', '起草', 'PPT', '说明', '方案编写', '方案设计', '方案制定', '流程', '规范', '手册', '指南'],
+        '问题处理': ['问题', '故障', '异常', '处理', '排查', '修复', '紧急', '应急', '投诉', '反馈', '工单', '事故', '告警', '报错', '报障', '解决', '跟踪', '督办'],
     };
     for (const [cat, keywords] of Object.entries(categoryKeywords)) {
         if (keywords.some(kw => text.includes(kw))) {
-            // 检查用户的分类列表里是否有这个分类
             if (settings.categories.includes(cat)) return cat;
         }
     }
+    // 未匹配到任何分类，归为"其他"
+    if (settings.categories.includes('其他')) return '其他';
     return settings.categories[0] || '其他';
 }
 
